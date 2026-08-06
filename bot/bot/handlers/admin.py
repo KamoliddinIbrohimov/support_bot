@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import httpx
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -7,13 +8,12 @@ from aiogram.types import Message, ReplyKeyboardRemove
 
 from bot.i18n import t
 from bot.keyboards import cancel_keyboard
+from bot.services import translation_service
 from bot.states import AddErrorStates, AddVideoStates
 from config.logger import logger
 from config.settings import settings
 from database.connection import get_session
 from database.repositories import ErrorRepository, UserRepository
-
-import httpx
 
 router = Router(name="admin")
 
@@ -24,8 +24,7 @@ def _is_admin(user_id: int) -> bool:
 
 async def _get_lang(user_id: int, language_code: str | None = None) -> str:
     async with get_session() as session:
-        repo = UserRepository(session)
-        user = await repo.get(user_id)
+        user = await UserRepository(session).get(user_id)
         if user:
             return user.language
     return "ru" if language_code == "ru" else "uz"
@@ -44,7 +43,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     await message.answer(t("cancel_ok", lang), reply_markup=ReplyKeyboardRemove())
 
 
-# ── /add_error — 5 bosqich ────────────────────────────────────────────────────
+# ── /add_error — 2 bosqich + AI tarjima ──────────────────────────────────────
 
 @router.message(Command("add_error"))
 async def cmd_add_error(message: Message, state: FSMContext) -> None:
@@ -52,81 +51,82 @@ async def cmd_add_error(message: Message, state: FSMContext) -> None:
     if not _is_admin(message.from_user.id):
         await message.answer(t("add_error_admin_only", lang))
         return
-    await state.set_state(AddErrorStates.waiting_for_title_ru)
+    await state.set_state(AddErrorStates.waiting_for_title)
     await state.update_data(lang=lang)
-    await message.answer(t("add_error_step1", lang), reply_markup=cancel_keyboard())
+    await message.answer(
+        "📝 <b>1/2</b> — Xatolik nomini yuboring (istalgan tilda: uz yoki ru)",
+        reply_markup=cancel_keyboard(),
+    )
 
 
-@router.message(AddErrorStates.waiting_for_title_ru, F.text)
-async def process_title_ru(message: Message, state: FSMContext) -> None:
+@router.message(AddErrorStates.waiting_for_title, F.text)
+async def process_title(message: Message, state: FSMContext) -> None:
+    title = message.text.strip()
+    if len(title) < 3:
+        await message.answer("❌ Nom juda qisqa. Kamida 3 ta belgi.")
+        return
+    await state.update_data(title=title)
+    await state.set_state(AddErrorStates.waiting_for_solution)
+    await message.answer(
+        "💡 <b>2/2</b> — Yechimni yuboring:\n\n"
+        "• Faqat matn\n"
+        "• Rasm + caption (yechim matni)\n"
+        "• Video + caption (yechim matni)\n\n"
+        "<i>AI ikkinchi tilga avtomatik tarjima qiladi.</i>",
+    )
+
+
+@router.message(AddErrorStates.waiting_for_solution)
+async def process_solution(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     lang: str = data.get("lang", "uz")
-    title_ru = message.text.strip()
-    if len(title_ru) < 3:
-        await message.answer(t("add_error_title_short", lang))
-        return
-    await state.update_data(title_ru=title_ru)
-    await state.set_state(AddErrorStates.waiting_for_title_uz)
-    await message.answer(t("add_error_step1_uz", lang))
+    title: str = data["title"]
 
+    # Media va matn ajratish
+    solution_text: str = ""
+    video_file_id: str | None = None
+    image_file_id: str | None = None
 
-@router.message(AddErrorStates.waiting_for_title_uz, F.text)
-async def process_title_uz(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang: str = data.get("lang", "uz")
-    title_uz = message.text.strip()
-    if len(title_uz) < 3:
-        await message.answer(t("add_error_title_short", lang))
-        return
-    await state.update_data(title_uz=title_uz)
-    await state.set_state(AddErrorStates.waiting_for_keywords)
-    await message.answer(t("add_error_step2", lang))
+    if message.text:
+        solution_text = message.text.strip()
+    elif message.video:
+        video_file_id = message.video.file_id
+        solution_text = (message.caption or "").strip()
+    elif message.photo:
+        image_file_id = message.photo[-1].file_id
+        solution_text = (message.caption or "").strip()
+    elif message.document and message.document.mime_type and message.document.mime_type.startswith("video"):
+        video_file_id = message.document.file_id
+        solution_text = (message.caption or "").strip()
 
-
-@router.message(AddErrorStates.waiting_for_keywords, F.text)
-async def process_keywords(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang: str = data.get("lang", "uz")
-    keywords = [k.strip() for k in message.text.split(",") if k.strip()]
-    if not keywords:
-        await message.answer(t("add_error_no_keywords", lang))
-        return
-    await state.update_data(keywords=keywords)
-    await state.set_state(AddErrorStates.waiting_for_solution_ru)
-    await message.answer(f"<b>{len(keywords)}</b> {t('add_error_step2_ok', lang)}")
-
-
-@router.message(AddErrorStates.waiting_for_solution_ru, F.text)
-async def process_solution_ru(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang: str = data.get("lang", "uz")
-    solution_ru = message.text.strip()
-    if len(solution_ru) < 5:
-        await message.answer(t("add_error_solution_short", lang))
-        return
-    await state.update_data(solution_ru=solution_ru)
-    await state.set_state(AddErrorStates.waiting_for_solution_uz)
-    await message.answer(t("add_error_step3_uz", lang))
-
-
-@router.message(AddErrorStates.waiting_for_solution_uz, F.text)
-async def process_solution_uz(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang: str = data.get("lang", "uz")
-    solution_uz = message.text.strip()
-    if len(solution_uz) < 5:
-        await message.answer(t("add_error_solution_short", lang))
+    if not solution_text:
+        await message.answer(
+            "❌ Yechim matni kerak.\n"
+            "Video/rasmga <b>caption</b> qo'shing yoki faqat matn yuboring."
+        )
         return
 
-    title_ru: str    = data["title_ru"]
-    title_uz: str    = data["title_uz"]
-    keywords: list   = data["keywords"]
-    solution_ru: str = data["solution_ru"]
+    # Tarjima
+    wait_msg = await message.answer("🔄 AI tarjima qilmoqda...")
 
+    translated = await translation_service.translate(title, solution_text)
+
+    if translated is None:
+        # Fallback — original matn ikki tilda ham
+        title_ru = title_uz = title
+        keywords = [title]
+        solution_ru = solution_uz = solution_text
+    else:
+        title_ru    = translated.title_ru
+        title_uz    = translated.title_uz
+        keywords    = translated.keywords
+        solution_ru = translated.solution_ru
+        solution_uz = translated.solution_uz
+
+    # DB ga saqlash
     try:
         async with get_session() as session:
-            repo = ErrorRepository(session)
-            entry = await repo.create(
+            entry = await ErrorRepository(session).create(
                 title=title_ru,
                 keywords=keywords,
                 solution=solution_ru,
@@ -136,40 +136,40 @@ async def process_solution_uz(message: Message, state: FSMContext) -> None:
                 keywords_uz=keywords,
                 solution_ru=solution_ru,
                 solution_uz=solution_uz,
+                solution_video_file_id=video_file_id,
+                solution_image_file_id=image_file_id,
             )
     except Exception as exc:
         logger.exception(f"add_error saqlashda xatolik: {exc}")
         await state.clear()
-        await message.answer(t("add_error_save_error", lang), reply_markup=ReplyKeyboardRemove())
+        await wait_msg.edit_text(t("add_error_save_error", lang))
         return
 
     await state.clear()
-    logger.info(f"Yangi error qo'shildi id={entry.id} title_ru={entry.title_ru!r}")
-    await message.answer(
-        f"{t('add_error_saved', lang)}\n\n"
+    logger.info(f"Yangi error qo'shildi id={entry.id} title_ru={title_ru!r}")
+
+    media_mark = ""
+    if video_file_id:
+        media_mark = " 🎥"
+    elif image_file_id:
+        media_mark = " 🖼"
+
+    kw_str = ", ".join(keywords[:5])
+    await wait_msg.edit_text(
+        f"✅ <b>Saqlandi{media_mark}</b>\n\n"
         f"<b>#{entry.id}</b>\n"
-        f"🇷🇺 {entry.title_ru}\n"
-        f"🇺🇿 {entry.title_uz}\n"
-        f"🔑 {', '.join(entry.keywords)}\n\n"
-        f"Video qo'shish: /add_video {entry.id}",
-        reply_markup=ReplyKeyboardRemove(),
+        f"🇷🇺 {title_ru}\n"
+        f"🇺🇿 {title_uz}\n"
+        f"🔑 {kw_str}{'…' if len(keywords) > 5 else ''}"
     )
 
 
-# ── FSM invalid input ─────────────────────────────────────────────────────────
-
-@router.message(AddErrorStates.waiting_for_title_ru)
-@router.message(AddErrorStates.waiting_for_title_uz)
-@router.message(AddErrorStates.waiting_for_keywords)
-@router.message(AddErrorStates.waiting_for_solution_ru)
-@router.message(AddErrorStates.waiting_for_solution_uz)
-async def fsm_wrong_input(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    lang: str = data.get("lang", "uz")
-    await message.answer(t("add_error_text_only", lang))
+@router.message(AddErrorStates.waiting_for_title)
+async def fsm_title_wrong(message: Message, state: FSMContext) -> None:
+    await message.answer("❌ Matn yuboring.")
 
 
-# ── /add_video ────────────────────────────────────────────────────────────────
+# ── /add_video — mavjud xatolikka video qo'shish ─────────────────────────────
 
 @router.message(Command("add_video"))
 async def cmd_add_video(message: Message, state: FSMContext) -> None:
@@ -189,13 +189,12 @@ async def cmd_add_video(message: Message, state: FSMContext) -> None:
             t("add_video_not_found", lang).replace("#{id}", str(error_id))
         )
         return
-    title = entry.get_title(lang)
     await state.set_state(AddVideoStates.waiting_for_video)
     await state.update_data(lang=lang, error_id=error_id)
     await message.answer(
         t("add_video_prompt", lang)
         .replace("#{id}", str(error_id))
-        .replace("{title}", title),
+        .replace("{title}", entry.get_title(lang)),
         reply_markup=cancel_keyboard(),
     )
 
@@ -291,17 +290,16 @@ async def cmd_verify_kb(message: Message) -> None:
             resp.raise_for_status()
             entry = resp.json()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            await message.answer(f"❌ Topilmadi: {entry_id}")
-        else:
-            await message.answer(f"⚠️ Xatolik: {exc.response.status_code}")
+        await message.answer(
+            f"❌ Topilmadi: {entry_id}" if exc.response.status_code == 404
+            else f"⚠️ Xatolik: {exc.response.status_code}"
+        )
         return
     except Exception as exc:
         await message.answer(f"⚠️ KB ga ulanib bo'lmadi: {exc}")
         return
-    title = entry.get("title") or "—"
     logger.info(f"KB entry verified: {entry_id} by admin {message.from_user.id}")
-    await message.answer(f"✅ Tasdiqlandi!\n<b>{title}</b>\n<code>{entry_id}</code>")
+    await message.answer(f"✅ Tasdiqlandi!\n<b>{entry.get('title', '—')}</b>\n<code>{entry_id}</code>")
 
 
 @router.message(Command("reject_kb"))
@@ -325,10 +323,10 @@ async def cmd_reject_kb(message: Message) -> None:
             )
             resp.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 404:
-            await message.answer(f"❌ Topilmadi: {entry_id}")
-        else:
-            await message.answer(f"⚠️ Xatolik: {exc.response.status_code}")
+        await message.answer(
+            f"❌ Topilmadi: {entry_id}" if exc.response.status_code == 404
+            else f"⚠️ Xatolik: {exc.response.status_code}"
+        )
         return
     except Exception as exc:
         await message.answer(f"⚠️ KB ga ulanib bo'lmadi: {exc}")

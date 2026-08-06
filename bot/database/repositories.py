@@ -72,6 +72,8 @@ class ErrorRepository:
         solution_uz: str | None = None,
         description_ru: str | None = None,
         description_uz: str | None = None,
+        solution_video_file_id: str | None = None,
+        solution_image_file_id: str | None = None,
     ) -> ErrorEntry:
         entry = ErrorEntry(
             title=title,
@@ -87,6 +89,8 @@ class ErrorRepository:
             solution_uz=solution_uz,
             description_ru=description_ru or description,
             description_uz=description_uz,
+            solution_video_file_id=solution_video_file_id,
+            solution_image_file_id=solution_image_file_id,
         )
         self._session.add(entry)
         await self._session.flush()

@@ -57,6 +57,7 @@ class ErrorEntry(Base):
     solution_uz: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     solution_video_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    solution_image_file_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

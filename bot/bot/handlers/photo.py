@@ -238,17 +238,19 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
 
 
 async def _send_video(message: Message, error: object, lang: str) -> None:
-    file_id = getattr(error, "solution_video_file_id", None)
-    if not file_id:
-        return
     from bot.i18n import t as _t
-    try:
-        await message.reply_video(
-            video=file_id,
-            caption=_t("match_video", lang),
-        )
-    except Exception as exc:
-        logger.warning(f"Video yuborishda xatolik: {exc}")
+    video_id = getattr(error, "solution_video_file_id", None)
+    image_id = getattr(error, "solution_image_file_id", None)
+    if video_id:
+        try:
+            await message.reply_video(video=video_id, caption=_t("match_video", lang))
+        except Exception as exc:
+            logger.warning(f"Video yuborishda xatolik: {exc}")
+    if image_id:
+        try:
+            await message.reply_photo(photo=image_id, caption=_t("match_video", lang))
+        except Exception as exc:
+            logger.warning(f"Rasm yuborishda xatolik: {exc}")
 
 
 async def _get_lang(user_id: int, language_code: str | None) -> str:
