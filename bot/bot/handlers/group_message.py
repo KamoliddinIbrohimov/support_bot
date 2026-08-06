@@ -10,7 +10,7 @@ from aiogram.enums import ChatAction
 from aiogram.types import Message
 from rapidfuzz import fuzz
 
-from bot import conversation_tracker, group_cache, resolution_handler, role_cache
+from bot import bot_context, conversation_tracker, group_cache, resolution_handler, role_cache
 from bot.conversation_tracker import TrackedMsg
 from bot.i18n import t
 from bot.services import ai_answer_service, kb_client
@@ -22,6 +22,7 @@ from config.settings import settings
 from database.connection import get_session
 from database.models import User
 from database.repositories import (
+    ErrorRepository,
     HelpKeywordRepository,
     MessageClassificationRepository,
     UserRepository,
@@ -247,6 +248,71 @@ def _random_greeting(lang: str) -> str:
 
 def _random_screenshot_hint(lang: str) -> str:
     return random.choice(_SCREENSHOT_HINTS.get(lang, _SCREENSHOT_HINTS["uz"]))
+
+
+# ── Bot mention handler ───────────────────────────────────────────────────────
+
+def _extract_mention_question(message: Message, bot_username: str) -> str | None:
+    """@bot_username mention bo'lsa, savolni qaytaradi. Bo'lmasa None."""
+    if not message.text or not message.entities:
+        return None
+    mention_tag = f"@{bot_username}".lower()
+    for ent in message.entities:
+        if ent.type == "mention":
+            chunk = message.text[ent.offset: ent.offset + ent.length].lower()
+            if chunk == mention_tag:
+                question = message.text.replace(
+                    message.text[ent.offset: ent.offset + ent.length], ""
+                ).strip()
+                return question or None
+    return None
+
+
+@router.message(F.chat.type.in_(_GROUP_TYPES), F.text)
+async def handle_bot_mention(message: Message, bot: Bot, state_manager: StateManager) -> None:
+    """Bot @mention aniqlanganda darhol AI javob beradi."""
+    if not group_cache.is_approved(message.chat.id):
+        return
+
+    bot_username = bot_context.bot_username
+    if not bot_username:
+        return
+
+    question = _extract_mention_question(message, bot_username)
+    if question is None:
+        return  # mention yo'q — keyingi handlerga o'tadi
+
+    user = message.from_user
+    lang = await _get_user_lang(user.id) or _detect_lang_simple(question)
+
+    logger.info(f"[mention] user={user.id} chat={message.chat.id} q={question[:60]!r}")
+
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+
+    # Errors bazasidan kontekst olamiz
+    async with get_session() as session:
+        errors = list(await ErrorRepository(session).list_all())
+
+    ai_ans = await ai_answer_service.generate(question, errors, lang)
+
+    if ai_ans:
+        await message.reply(ai_ans.text)
+        logger.info(f"[mention] AI javob berdi chat={message.chat.id}")
+        return
+
+    # AI javob bera olmadi → support ni @mention
+    mentions = role_cache.get_support_mentions()
+    if mentions:
+        mention_str = " ".join(mentions)
+        if lang == "ru":
+            await message.reply(f"❓ Точного ответа не нашлось.\n{mention_str} — помогите!")
+        else:
+            await message.reply(f"❓ Aniq javob topilmadi.\n{mention_str} — yordam bering!")
+    else:
+        if lang == "ru":
+            await message.reply("❓ По данному вопросу точного ответа нет. Обратитесь к администратору.")
+        else:
+            await message.reply("❓ Bu savol bo'yicha aniq javob topilmadi. Administratorga murojaat qiling.")
 
 
 # ── Main handler ──────────────────────────────────────────────────────────────
