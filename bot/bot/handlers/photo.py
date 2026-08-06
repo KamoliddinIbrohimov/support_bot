@@ -108,14 +108,16 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
                 message, str(image_path), ocr_text, ocr_conf,
                 fuzzy.error.id, float(fuzzy.score), f"fuzzy_{ocr_source}",
             )
-            await message.reply(format_match_reply(
+            reply_text = format_match_reply(
                 title=fuzzy.error.get_title(lang),
                 detected_text=ocr_text,
                 solution=fuzzy.error.get_solution(lang),
                 score=fuzzy.score,
                 lang=lang,
-            ))
-            await _send_video(message, fuzzy.error, lang)
+            )
+            sent = await _send_media_with_caption(message, fuzzy.error, reply_text)
+            if not sent:
+                await message.reply(reply_text)
             return
 
     # ── Step 5: AI OCR fallback — faqat KB+fuzzy fail bo'lgandan keyin ────────
@@ -157,14 +159,16 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
                     message, str(image_path), ocr_text, None,
                     fuzzy.error.id, float(fuzzy.score), "fuzzy_ai",
                 )
-                await message.reply(format_match_reply(
+                reply_text = format_match_reply(
                     title=fuzzy.error.get_title(lang),
                     detected_text=ocr_text,
                     solution=fuzzy.error.get_solution(lang),
                     score=fuzzy.score,
                     lang=lang,
-                ))
-                await _send_video(message, fuzzy.error, lang)
+                )
+                sent = await _send_media_with_caption(message, fuzzy.error, reply_text)
+                if not sent:
+                    await message.reply(reply_text)
                 return
 
     # ── Step 6: Vision AI — so'nggi chora ────────────────────────────────────
@@ -180,15 +184,17 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
             message, str(image_path), ocr_text, None,
             vision.error.id, vision.score, "vision_ai",
         )
-        await message.reply(format_match_reply(
+        reply_text = format_match_reply(
             title=vision.error.get_title(lang),
             detected_text=ocr_text,
             solution=vision.error.get_solution(lang),
             score=vision.score,
             lang=lang,
             via_vision=True,
-        ))
-        await _send_video(message, vision.error, lang)
+        )
+        sent = await _send_media_with_caption(message, vision.error, reply_text)
+        if not sent:
+            await message.reply(reply_text)
         return
 
     # ── Not found ─────────────────────────────────────────────────────────────
@@ -237,20 +243,26 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
         )
 
 
-async def _send_video(message: Message, error: object, lang: str) -> None:
-    from bot.i18n import t as _t
+async def _send_media_with_caption(
+    message: Message, error: object, caption: str
+) -> bool:
+    """Video yoki rasmni caption bilan yubor. Yuborilsa True qaytaradi."""
     video_id = getattr(error, "solution_video_file_id", None)
     image_id = getattr(error, "solution_image_file_id", None)
+    cap = caption[:1024]  # Telegram caption limiti
     if video_id:
         try:
-            await message.reply_video(video=video_id, caption=_t("match_video", lang))
+            await message.reply_video(video=video_id, caption=cap)
+            return True
         except Exception as exc:
             logger.warning(f"Video yuborishda xatolik: {exc}")
     if image_id:
         try:
-            await message.reply_photo(photo=image_id, caption=_t("match_video", lang))
+            await message.reply_photo(photo=image_id, caption=cap)
+            return True
         except Exception as exc:
             logger.warning(f"Rasm yuborishda xatolik: {exc}")
+    return False
 
 
 async def _get_lang(user_id: int, language_code: str | None) -> str:
