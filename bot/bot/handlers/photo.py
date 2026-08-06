@@ -196,47 +196,38 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
 
     is_group = message.chat.type in ("group", "supergroup")
 
-    if not ocr_text:
-        await message.reply(format_empty_ocr_reply(lang))
-    elif is_group:
-        # Guruhda: support ni chaqir va suhbatni kuzat
+    if is_group:
+        # Guruhda: matn ko'rsatmaymiz, support ni chaqiramiz
         mentions = role_cache.get_support_mentions()
-        if mentions:
-            mention_str = " ".join(mentions)
-            if lang == "ru":
-                call_text = (
-                    f"❓ Скриншот распознан, но решение не найдено.\n"
-                    f"{mention_str} — нужна помощь!"
-                )
-            else:
-                call_text = (
-                    f"❓ Screenshot tanildi, lekin yechim topilmadi.\n"
-                    f"{mention_str} — yordam kerak!"
-                )
-            await message.reply(call_text)
-            # Kuzatishni boshlash
-            full_name = " ".join(filter(None, [user.first_name, user.last_name])) or str(user.id)
-            conversation_tracker.start(
-                message.chat.id,
-                TrackedMsg(
-                    user_id=user.id,
-                    username=user.username,
-                    display_name=full_name,
-                    is_support=False,
-                    text=f"[Screenshot] OCR: {ocr_text[:300]}",
-                ),
+        mention_str = " ".join(mentions) if mentions else ""
+        if lang == "ru":
+            call_text = (
+                f"❓ Не удалось найти решение по данному скриншоту.\n"
+                + (f"{mention_str} — нужна помощь!" if mention_str else "Обратитесь к администратору.")
             )
-            logger.info(f"[tracker] Screenshot no-match: kuzatish boshlandi chat={message.chat.id}")
         else:
-            sent = await message.reply(format_no_match_reply(ocr_text, lang))
-            await state_manager.set_no_match_watch(
-                bot_message_id=sent.message_id,
-                chat_id=message.chat.id,
-                ocr_text=ocr_text,
-                lang=lang,
+            call_text = (
+                f"❓ Screenshot bo'yicha yechim topilmadi.\n"
+                + (f"{mention_str} — yordam kerak!" if mention_str else "Iltimos, administratorga murojat qiling.")
             )
+        await message.reply(call_text)
+        # Suhbatni kuzatishni boshlash
+        full_name = " ".join(filter(None, [user.first_name, user.last_name])) or str(user.id)
+        conversation_tracker.start(
+            message.chat.id,
+            TrackedMsg(
+                user_id=user.id,
+                username=user.username,
+                display_name=full_name,
+                is_support=False,
+                text=f"[Screenshot] {ocr_text[:300] if ocr_text else 'OCR topilmadi'}",
+            ),
+        )
+        logger.info(f"[tracker] Screenshot no-match: kuzatish boshlandi chat={message.chat.id}")
+    elif not ocr_text:
+        await message.reply(format_empty_ocr_reply(lang))
     else:
-        # Private chat: eski xulq
+        # Private chat
         sent = await message.reply(format_no_match_reply(ocr_text, lang))
         await state_manager.set_no_match_watch(
             bot_message_id=sent.message_id,

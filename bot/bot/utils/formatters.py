@@ -18,7 +18,6 @@ def format_match_reply(
     parts = [
         f"{t('match_header', lang)}\n\n",
         f"{t('match_problem', lang)}\n{escape(title)}\n\n",
-        f"{t('match_ocr_text', lang)}\n<code>{escape(detected_text or '—')}</code>\n\n",
         f"{t('match_solution', lang)}\n{escape(solution)}\n\n",
         f"{t('match_accuracy', lang)} {score:.0f}%",
     ]
@@ -28,12 +27,7 @@ def format_match_reply(
 
 
 def format_no_match_reply(detected_text: str, lang: str = "uz") -> str:
-    body = escape(detected_text) if detected_text else "—"
-    return (
-        f"{t('no_match', lang)}\n\n"
-        f"{t('no_match_text', lang)}\n<code>{body}</code>\n\n"
-        f"{t('no_match_body', lang)}"
-    )
+    return f"{t('no_match', lang)}\n\n{t('no_match_body', lang)}"
 
 
 def format_empty_ocr_reply(lang: str = "uz") -> str:

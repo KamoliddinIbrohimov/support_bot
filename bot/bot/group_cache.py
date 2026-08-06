@@ -9,12 +9,16 @@ _approved: set[int] = set()
 
 
 async def load() -> None:
+    from bot import role_cache
     from database.connection import get_session
     from database.repositories import GroupRepository
     async with get_session() as session:
         groups = await GroupRepository(session).list_approved()
         _approved.clear()
         _approved.update(g.chat_id for g in groups)
+        # Tasdiqlangan guruhlar darhol active rejimda bo'lsin
+        for g in groups:
+            role_cache.set_active(g.chat_id)
 
 
 def is_approved(chat_id: int) -> bool:

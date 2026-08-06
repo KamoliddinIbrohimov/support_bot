@@ -9,7 +9,7 @@ from aiogram.types import (
     InlineKeyboardMarkup,
 )
 
-from bot import group_cache
+from bot import group_cache, role_cache
 from config.logger import logger
 from config.settings import settings
 from database.connection import get_session
@@ -134,7 +134,15 @@ async def cb_approve_group(callback: CallbackQuery, bot: Bot) -> None:
         return
 
     group_cache.mark_approved(chat_id)
-    logger.info(f"Guruh tasdiqlandi: chat_id={chat_id} by={callback.from_user.id}")
+    role_cache.set_active(chat_id)  # tasdiqlash = darhol active rejim
+    # Botni qo'shgan odamni support sifatida belgilaymiz
+    if group.added_by_id:
+        role_cache.mark_support(
+            group.added_by_id,
+            username=group.added_by_username,
+            full_name=group.added_by_name,
+        )
+    logger.info(f"Guruh tasdiqlandi va active: chat_id={chat_id} by={callback.from_user.id}")
 
     title = group.title or str(chat_id)
     await callback.message.edit_text(
