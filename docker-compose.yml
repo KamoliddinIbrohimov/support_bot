@@ -1,0 +1,128 @@
+services:
+  # ── Shared infrastructure ─────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: support_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${BOT_POSTGRES_USER:-support_user}
+      POSTGRES_PASSWORD: ${BOT_POSTGRES_PASSWORD:-support_pass}
+      POSTGRES_DB: ${BOT_POSTGRES_DB:-support_bot}
+    ports:
+      - "5432:5432"
+    volumes:
+      - epos_bot_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${BOT_POSTGRES_USER:-support_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: support_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - epos_bot_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  kb-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: kb_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${KB_POSTGRES_USER:-kb_user}
+      POSTGRES_PASSWORD: ${KB_POSTGRES_PASSWORD:-kb_pass}
+      POSTGRES_DB: ${KB_POSTGRES_DB:-kb}
+    ports:
+      - "5433:5432"
+    volumes:
+      - epos_kb_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER:-kb_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Knowledge Base service ────────────────────────────────────────────────
+  kb-api:
+    build:
+      context: ./kb
+    container_name: kb_api
+    restart: unless-stopped
+    depends_on:
+      kb-postgres:
+        condition: service_healthy
+    env_file:
+      - ./kb/.env
+    environment:
+      POSTGRES_HOST: kb-postgres
+    ports:
+      - "8100:8000"
+    command: >
+      sh -c "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+
+  # ── Support Bot ───────────────────────────────────────────────────────────
+  bot:
+    build:
+      context: ./bot
+    image: epos-support-bot:latest
+    container_name: support_bot
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kb-api:
+        condition: service_started
+    env_file:
+      - ./bot/.env
+    environment:
+      POSTGRES_HOST: postgres
+      ip: postgres
+      REDIS_URL: redis://redis:6379/0
+      KB_API_URL: http://kb-api:8000
+    volumes:
+      - ./bot/storage:/app/storage
+      - ./bot/logs:/app/logs
+      - easyocr_models:/root/.EasyOCR
+    command: >
+      sh -c "alembic upgrade head && python -m bot.main"
+
+  # ── Bot REST API ──────────────────────────────────────────────────────────
+  bot-api:
+    build:
+      context: ./bot
+    image: epos-support-bot:latest
+    container_name: support_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ./bot/.env
+    environment:
+      POSTGRES_HOST: postgres
+      ip: postgres
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./bot/storage:/app/storage
+      - ./bot/logs:/app/logs
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+
+volumes:
+  epos_bot_postgres_data:
+  epos_bot_redis_data:
+  epos_kb_postgres_data:
+  easyocr_models:
