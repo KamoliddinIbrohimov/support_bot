@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import random
 from datetime import datetime, timezone
 from time import monotonic
 
@@ -125,12 +126,11 @@ async def _call_support(message: Message, lang: str, client_text: str) -> None:
                 f"❓ Bu muammo bo'yicha yechim topilmadi.\n"
                 f"{mention_str} — yordam kerak!"
             )
+        await message.reply(text)
     else:
-        # Support hali aniqlanmagan → screenshot so'ra
-        await message.reply(t("send_screenshot_request", lang))
+        # Support aniqlanmagan → screenshot hint (varied)
+        await message.reply(_random_screenshot_hint(lang))
         return
-
-    await message.reply(text)
 
     # Suhbatni kuzatishni boshlash
     conversation_tracker.start(
@@ -170,23 +170,62 @@ async def _delayed_reply(
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="kb_text_match")
                 return
-
-        # KB da ham topilmadi → support ni chaqir
-        await _call_support(message, lang, text)
-        await _log(user=message.from_user, chat_id=message.chat.id,
-                   text=text, result=result, action="called_support")
-        logger.info(f"Support chaqirildi ({action_tag}) — chat={message.chat.id}")
+            # Detail bor lekin KB miss → support chaqir
+            await _call_support(message, lang, text)
+            await _log(user=message.from_user, chat_id=message.chat.id,
+                       text=text, result=result, action="called_support")
+            logger.info(f"Support chaqirildi ({action_tag}) — chat={message.chat.id}")
+        else:
+            # Detail yetarli emas → screenshot hint (varied, majburiy emas)
+            await message.reply(_random_screenshot_hint(lang))
+            await _log(user=message.from_user, chat_id=message.chat.id,
+                       text=text, result=result, action="asked_screenshot_hint")
 
     except asyncio.CancelledError:
         pass
 
 
-# ── Greeting reply ─────────────────────────────────────────────────────────────
+# ── Varied replies ─────────────────────────────────────────────────────────────
 
-_GREETING_REPLIES = {
-    "uz": "Salom! 👋 Muammolaringiz bo'lsa, screenshot yuboring — yordam beraman.",
-    "ru": "Привет! 👋 Если есть проблемы — отправьте скриншот, помогу.",
+_GREETINGS = {
+    "uz": [
+        "Salom! 👋",
+        "Assalomu alaykum! 😊",
+        "Xush kelibsiz! 🤖",
+        "Salom-salom! 👋 Qanday yordam bera olaman?",
+        "Salom! Muammo bo'lsa yordamlashaman. 🙂",
+    ],
+    "ru": [
+        "Привет! 👋",
+        "Здравствуйте! 😊",
+        "Добрый день! 🤖",
+        "Привет-привет! 👋 Чем могу помочь?",
+        "Здравствуйте! Готов помочь. 🙂",
+    ],
 }
+
+_SCREENSHOT_HINTS = {
+    "uz": [
+        "Xatolik screenshotini yuboring — qarab beraman. 📸",
+        "Screenshot tashlasangiz, tezroq yordam bera olaman.",
+        "Muammo screenshotini yuboring. 🖼",
+        "Agar xatolik ekranda ko'rinsa — screenshot yuboring.",
+    ],
+    "ru": [
+        "Пришлите скриншот ошибки — разберёмся. 📸",
+        "Отправьте скриншот — помогу быстрее.",
+        "Скриншот проблемы поможет разобраться. 🖼",
+        "Если ошибка на экране — скиньте скриншот.",
+    ],
+}
+
+
+def _random_greeting(lang: str) -> str:
+    return random.choice(_GREETINGS.get(lang, _GREETINGS["uz"]))
+
+
+def _random_screenshot_hint(lang: str) -> str:
+    return random.choice(_SCREENSHOT_HINTS.get(lang, _SCREENSHOT_HINTS["uz"]))
 
 
 # ── Main handler ──────────────────────────────────────────────────────────────
@@ -285,7 +324,7 @@ async def handle_group_text(message: Message, state_manager: StateManager) -> No
 
     # Salom/tabrik
     if result.message_type == "greeting" and result.confidence >= 0.6:
-        await message.reply(_GREETING_REPLIES.get(lang, _GREETING_REPLIES["uz"]))
+        await message.reply(_random_greeting(lang))
         await _log(user=user, chat_id=chat_id, text=text,
                    result=result, action="greeting_reply")
         return
