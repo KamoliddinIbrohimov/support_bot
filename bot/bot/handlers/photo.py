@@ -9,6 +9,7 @@ from aiogram.types import Message, PhotoSize
 from bot import conversation_tracker, group_cache, role_cache
 from bot.conversation_tracker import TrackedMsg
 from bot.services import ai_answer_service
+from bot.handlers.group_message import mark_solved, start_followup
 from bot.i18n import t
 from bot.services import ErrorFinderService
 from bot.services import relevance_service, vision_service
@@ -146,6 +147,8 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
             sent = await _send_media_with_caption(message, fuzzy.error, reply_text)
             if not sent:
                 await message.reply(reply_text)
+            mark_solved(message.chat.id, user.id)
+            start_followup(message, lang)
             return
 
     # ── Step 5: AI OCR fallback — faqat KB+fuzzy fail bo'lgandan keyin ────────
@@ -197,6 +200,8 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
                 sent = await _send_media_with_caption(message, fuzzy.error, reply_text)
                 if not sent:
                     await message.reply(reply_text)
+                mark_solved(message.chat.id, user.id)
+                start_followup(message, lang)
                 return
 
     # ── Step 6: Vision AI — so'nggi chora ────────────────────────────────────
@@ -223,6 +228,8 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
         sent = await _send_media_with_caption(message, vision.error, reply_text)
         if not sent:
             await message.reply(reply_text)
+        mark_solved(message.chat.id, user.id)
+        start_followup(message, lang)
         return
 
     # ── Not found — AI mustaqil javob beradi ─────────────────────────────────

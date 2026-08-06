@@ -36,18 +36,49 @@ _GROUP_TYPES = {"group", "supergroup"}
 CONFIDENCE_THRESHOLD = 0.7
 KEYWORD_FUZZY_THRESHOLD = 75
 
-_pending: dict[int, asyncio.Task] = {}
+# (chat_id, user_id) → task: har bir foydalanuvchi alohida kuzatiladi
+_pending: dict[tuple[int, int], asyncio.Task] = {}
+
+# Bot yechim bergan vaqt (gratitude va follow-up uchun)
+_solved_at: dict[tuple[int, int], float] = {}
+_followup_tasks: dict[tuple[int, int], asyncio.Task] = {}
+
+SOLVED_TTL = 600    # 10 daqiqa ichida "rahmat" → bot yechgan deb hisoblanadi
+FOLLOWUP_DELAY = 300  # Yechim bergandan 5 daqiqa o'tsa — tekshirish
 
 _kw_cache: list[str] = []
 _kw_cache_at: float = 0.0
 _KW_CACHE_TTL = 60.0
 
 
-def cancel_pending(chat_id: int) -> None:
-    task = _pending.pop(chat_id, None)
+def cancel_pending(chat_id: int, user_id: int | None = None) -> None:
+    if user_id is not None:
+        task = _pending.pop((chat_id, user_id), None)
+        if task:
+            task.cancel()
+            logger.info(f"30s timer bekor (chat={chat_id} user={user_id})")
+    else:
+        # photo.py dan chat_id bilan chaqiriladi — shu chatdagi barchasini bekor
+        keys = [k for k in _pending if k[0] == chat_id]
+        for k in keys:
+            task = _pending.pop(k, None)
+            if task:
+                task.cancel()
+
+
+def mark_solved(chat_id: int, user_id: int) -> None:
+    _solved_at[(chat_id, user_id)] = monotonic()
+
+
+def was_recently_solved(chat_id: int, user_id: int) -> bool:
+    ts = _solved_at.get((chat_id, user_id))
+    return ts is not None and monotonic() - ts < SOLVED_TTL
+
+
+def cancel_followup(chat_id: int, user_id: int) -> None:
+    task = _followup_tasks.pop((chat_id, user_id), None)
     if task:
         task.cancel()
-        logger.info(f"30s timer bekor — inson javob berdi (chat={chat_id})")
 
 
 def _lang(detected: str) -> str:
@@ -184,6 +215,8 @@ async def _delayed_reply(
                 ))
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="kb_text_match")
+                mark_solved(message.chat.id, message.from_user.id)
+                start_followup(message, lang)
                 return
 
         # 2. Errors DB fuzzy match (matn orqali ham topilishi kerak)
@@ -201,6 +234,8 @@ async def _delayed_reply(
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="fuzzy_text_match")
                 logger.info(f"[fuzzy-text] chat={message.chat.id} score={fuzzy.score:.0f}")
+                mark_solved(message.chat.id, message.from_user.id)
+                start_followup(message, lang)
                 return
 
         # 3. AI mustaqil javob
@@ -211,6 +246,8 @@ async def _delayed_reply(
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="ai_answer")
                 logger.info(f"[ai-answer] Matn javob berildi chat={message.chat.id}")
+                mark_solved(message.chat.id, message.from_user.id)
+                start_followup(message, lang)
                 return
 
         # 4. Hech narsa topilmadi → support chaqir
@@ -269,6 +306,59 @@ def _random_greeting(lang: str) -> str:
 
 def _random_screenshot_hint(lang: str) -> str:
     return random.choice(_SCREENSHOT_HINTS.get(lang, _SCREENSHOT_HINTS["uz"]))
+
+
+_GRATITUDE_REPLIES = {
+    "uz": [
+        "Xursand bo'ldim! 😊 Boshqa savol bo'lsa, yozing.",
+        "Iltimos! 👍 Yana yordam kerak bo'lsa, doim shu yerda.",
+        "Salomat bo'ling! 🙂 Muammo bo'lsa, qaytib keling.",
+        "Barakalla! 😊 Qo'shimcha savol bo'lsa — yozing.",
+    ],
+    "ru": [
+        "Рад помочь! 😊 Если что — пишите.",
+        "Пожалуйста! 👍 Обращайтесь, всегда готов помочь.",
+        "Будьте здоровы! 🙂 Если возникнут вопросы — пишите.",
+        "Отлично! 😊 Удачи! Если нужна помощь — обращайтесь.",
+    ],
+}
+
+_FOLLOWUP_MSGS = {
+    "uz": [
+        "Muammo hal bo'ldimi? 🤔 Agar yana yordam kerak bo'lsa — yozing!",
+        "Hamma narsa yaxshimi? Savol bo'lsa, qo'rqmay yozing. 😊",
+        "Yechim yordam berdimi? Boshqa savol bo'lsa — men shu yerdaman.",
+    ],
+    "ru": [
+        "Проблема решилась? 🤔 Если нужна помощь — пишите!",
+        "Всё получилось? Если есть вопросы — обращайтесь. 😊",
+        "Решение помогло? Если что-то ещё — я здесь.",
+    ],
+}
+
+_UNSUPPORTED_MEDIA = {
+    "uz": "📸 Iltimos, xatolikni <b>screenshot</b> (rasm) yoki <b>matn</b> ko'rinishida yuboring.",
+    "ru": "📸 Пожалуйста, отправьте ошибку в виде <b>скриншота</b> или <b>текста</b>.",
+}
+
+
+async def _send_followup(message: Message, lang: str) -> None:
+    try:
+        await asyncio.sleep(FOLLOWUP_DELAY)
+        key = (message.chat.id, message.from_user.id)
+        _followup_tasks.pop(key, None)
+        replies = _FOLLOWUP_MSGS.get(lang, _FOLLOWUP_MSGS["uz"])
+        await message.reply(random.choice(replies))
+    except asyncio.CancelledError:
+        pass
+
+
+def start_followup(message: Message, lang: str) -> None:
+    key = (message.chat.id, message.from_user.id)
+    old = _followup_tasks.pop(key, None)
+    if old:
+        old.cancel()
+    _followup_tasks[key] = asyncio.create_task(_send_followup(message, lang))
 
 
 # ── Bot mention handler ───────────────────────────────────────────────────────
@@ -350,6 +440,27 @@ async def handle_bot_mention(message: Message, bot: Bot, state_manager: StateMan
             await message.reply("❓ Bu savol bo'yicha aniq javob topilmadi. Administratorga murojaat qiling.")
 
 
+# ── Unsupported media handler ─────────────────────────────────────────────────
+
+@router.message(
+    F.chat.type.in_(_GROUP_TYPES),
+    F.video | F.voice | F.audio | F.document | F.sticker | F.animation,
+)
+async def handle_unsupported_media(message: Message) -> None:
+    if not group_cache.is_approved(message.chat.id):
+        return
+    if role_cache.get_mode(message.chat.id) == "observing":
+        return
+    user = message.from_user
+    if user is None or role_cache.is_support(user.id):
+        return  # support xodimining mediasiga aralashmaymiz
+    # Stiker — javob bermaymiz
+    if message.sticker or message.animation:
+        return
+    lang = await _get_user_lang(user.id) or "uz"
+    await message.reply(_UNSUPPORTED_MEDIA.get(lang, _UNSUPPORTED_MEDIA["uz"]))
+
+
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 @router.message(F.chat.type.in_(_GROUP_TYPES), F.text)
@@ -367,7 +478,8 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
     if not text:
         return
 
-    # ── Kuzatilayotgan suhbatga xabar qo'shish (har doim) ────────────────────
+    # ── Xabar keldi — follow-up timer bekor, tracker yangilanadi ─────────────
+    cancel_followup(chat_id, user.id)
     is_supp = role_cache.is_support(user.id)
     if conversation_tracker.is_tracking(chat_id):
         conversation_tracker.add(chat_id, _tracked_msg(user, text, is_support=is_supp))
@@ -394,7 +506,7 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
             task = asyncio.create_task(
                 _delayed_reply(message, bot, lang, None, text, state_manager, "keyword")
             )
-            _pending[chat_id] = task
+            _pending[(chat_id, user.id)] = task
         return
 
     result = await classify(text)
@@ -407,7 +519,15 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
         f"conf={result.confidence:.2f} lang={lang}"
     )
 
-    # ── 2a. Muammo hal bo'ldi (klent tasdiqladi) ──────────────────────────────
+    # ── 2a. Muammo hal bo'ldi yoki rahmat ────────────────────────────────────
+    if result.message_type in ("resolved", "greeting") and result.confidence >= 0.6:
+        if was_recently_solved(chat_id, user.id):
+            # Bot yechgan edi → rahmat/ishladi javobiga munosabat bildirish
+            await message.reply(random.choice(_GRATITUDE_REPLIES.get(lang, _GRATITUDE_REPLIES["uz"])))
+            cancel_followup(chat_id, user.id)
+            _solved_at.pop((chat_id, user.id), None)
+            logger.info(f"[gratitude] chat={chat_id} user={user.id}")
+
     if result.message_type == "resolved" and conversation_tracker.is_tracking(chat_id):
         messages = conversation_tracker.stop_and_get(chat_id)
         logger.info(
@@ -468,7 +588,7 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
     task = asyncio.create_task(
         _delayed_reply(message, bot, lang, result, text, state_manager, "ai")
     )
-    _pending[chat_id] = task
+    _pending[(chat_id, user.id)] = task
     logger.info(
         f"30s timer boshlandi (AI) — chat={chat_id} "
         f"conf={result.confidence:.2f} detail={result.has_enough_detail}"
