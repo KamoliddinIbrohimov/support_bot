@@ -11,6 +11,7 @@ from aiogram.types import Message
 from rapidfuzz import fuzz
 
 from bot import bot_context, conversation_tracker, group_cache, resolution_handler, role_cache
+from bot.services import ErrorFinderService
 from bot.conversation_tracker import TrackedMsg
 from bot.i18n import t
 from bot.services import ai_answer_service, kb_client
@@ -29,6 +30,7 @@ from database.repositories import (
 )
 
 router = Router(name="group_message")
+_error_finder = ErrorFinderService()
 
 _GROUP_TYPES = {"group", "supergroup"}
 CONFIDENCE_THRESHOLD = 0.7
@@ -165,7 +167,11 @@ async def _delayed_reply(
         except Exception:
             pass
 
-        # KB dan qidirish
+        # Errors DB dan yuklaymiz (KB + fuzzy + AI uchun kerak)
+        async with get_session() as session:
+            errors = list(await ErrorRepository(session).list_all())
+
+        # 1. KB semantic search
         if has_detail and text:
             kb_match = await kb_client.search(text, lang)
             if kb_match:
@@ -179,24 +185,39 @@ async def _delayed_reply(
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="kb_text_match")
                 return
-            # Detail bor lekin KB miss → AI mustaqil javob bersin
-            if settings.llm_enabled:
-                from database.connection import get_session
-                from database.repositories import ErrorRepository
-                async with get_session() as session:
-                    errors = list(await ErrorRepository(session).list_all())
-                ai_ans = await ai_answer_service.generate(text, errors, lang)
-                if ai_ans:
-                    await message.reply(ai_ans.text)
-                    await _log(user=message.from_user, chat_id=message.chat.id,
-                               text=text, result=result, action="ai_answer")
-                    logger.info(f"[ai-answer] Matn javob berildi chat={message.chat.id}")
-                    return
-            # AI ham javob bera olmadi → support chaqir
-            await _call_support(message, lang, text)
-            await _log(user=message.from_user, chat_id=message.chat.id,
-                       text=text, result=result, action="called_support")
-            logger.info(f"Support chaqirildi ({action_tag}) — chat={message.chat.id}")
+
+        # 2. Errors DB fuzzy match (matn orqali ham topilishi kerak)
+        if text:
+            fuzzy = _error_finder.find_best(text, errors, lang)
+            if fuzzy:
+                reply_text = format_match_reply(
+                    title=fuzzy.error.get_title(lang),
+                    detected_text=text,
+                    solution=fuzzy.error.get_solution(lang),
+                    score=fuzzy.score,
+                    lang=lang,
+                )
+                await _send_match_with_media(message, fuzzy.error, reply_text)
+                await _log(user=message.from_user, chat_id=message.chat.id,
+                           text=text, result=result, action="fuzzy_text_match")
+                logger.info(f"[fuzzy-text] chat={message.chat.id} score={fuzzy.score:.0f}")
+                return
+
+        # 3. AI mustaqil javob
+        if settings.llm_enabled and text:
+            ai_ans = await ai_answer_service.generate(text, errors, lang)
+            if ai_ans:
+                await message.reply(ai_ans.text)
+                await _log(user=message.from_user, chat_id=message.chat.id,
+                           text=text, result=result, action="ai_answer")
+                logger.info(f"[ai-answer] Matn javob berildi chat={message.chat.id}")
+                return
+
+        # 4. Hech narsa topilmadi → support chaqir
+        await _call_support(message, lang, text)
+        await _log(user=message.from_user, chat_id=message.chat.id,
+                   text=text, result=result, action="called_support")
+        logger.info(f"Support chaqirildi ({action_tag}) — chat={message.chat.id}")
         else:
             # Detail yetarli emas → screenshot hint (varied, majburiy emas)
             await message.reply(_random_screenshot_hint(lang))
@@ -293,8 +314,22 @@ async def handle_bot_mention(message: Message, bot: Bot, state_manager: StateMan
     async with get_session() as session:
         errors = list(await ErrorRepository(session).list_all())
 
-    ai_ans = await ai_answer_service.generate(question, errors, lang)
+    # 1. Fuzzy match
+    fuzzy = _error_finder.find_best(question, errors, lang)
+    if fuzzy:
+        reply_text = format_match_reply(
+            title=fuzzy.error.get_title(lang),
+            detected_text=question,
+            solution=fuzzy.error.get_solution(lang),
+            score=fuzzy.score,
+            lang=lang,
+        )
+        await _send_match_with_media(message, fuzzy.error, reply_text)
+        logger.info(f"[mention-fuzzy] chat={message.chat.id} score={fuzzy.score:.0f}")
+        return
 
+    # 2. AI javob
+    ai_ans = await ai_answer_service.generate(question, errors, lang)
     if ai_ans:
         await message.reply(ai_ans.text)
         logger.info(f"[mention] AI javob berdi chat={message.chat.id}")
@@ -441,6 +476,26 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+async def _send_match_with_media(message: Message, error: object, reply_text: str) -> None:
+    """Yechim + video/rasm bitta xabarda (caption). Media yo'q bo'lsa faqat matn."""
+    video_id = getattr(error, "solution_video_file_id", None)
+    image_id = getattr(error, "solution_image_file_id", None)
+    cap = reply_text[:1024]
+    if video_id:
+        try:
+            await message.reply_video(video=video_id, caption=cap)
+            return
+        except Exception as exc:
+            logger.warning(f"Video yuborishda xatolik: {exc}")
+    if image_id:
+        try:
+            await message.reply_photo(photo=image_id, caption=cap)
+            return
+        except Exception as exc:
+            logger.warning(f"Rasm yuborishda xatolik: {exc}")
+    await message.reply(reply_text)
+
 
 async def _get_user_lang(user_id: int) -> str | None:
     try:
