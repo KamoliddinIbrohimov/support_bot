@@ -135,13 +135,6 @@ async def cb_approve_group(callback: CallbackQuery, bot: Bot) -> None:
 
     group_cache.mark_approved(chat_id)
     role_cache.set_active(chat_id)  # tasdiqlash = darhol active rejim
-    # Botni qo'shgan odamni support sifatida belgilaymiz
-    if group.added_by_id:
-        role_cache.mark_support(
-            group.added_by_id,
-            username=group.added_by_username,
-            full_name=group.added_by_name,
-        )
     logger.info(f"Guruh tasdiqlandi va active: chat_id={chat_id} by={callback.from_user.id}")
 
     title = group.title or str(chat_id)
