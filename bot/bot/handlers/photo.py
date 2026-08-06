@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+
 from aiogram import Bot, F, Router
+from aiogram.enums import ChatAction
 from aiogram.types import Message, PhotoSize
 
 from bot import conversation_tracker, group_cache, role_cache
@@ -28,6 +31,16 @@ router = Router(name="photo")
 error_finder = ErrorFinderService()
 
 
+async def _typing_loop(bot: Bot, chat_id: int, stop: asyncio.Event) -> None:
+    """Javob izlayotganda 'yozmoqda...' ko'rsatib turadi (har 4 soniyada)."""
+    while not stop.is_set():
+        try:
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+        await asyncio.sleep(4)
+
+
 @router.message(F.photo)
 async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) -> None:
     photo: PhotoSize = message.photo[-1]
@@ -44,6 +57,20 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
 
     image_path = build_image_path(chat_id=message.chat.id, user_id=user.id)
     cancel_pending(message.chat.id)
+
+    # Javob izlayotganda "yozmoqda..." ko'rsatish
+    _stop_typing = asyncio.Event()
+    _typing_task = asyncio.create_task(_typing_loop(bot, message.chat.id, _stop_typing))
+
+    try:
+        await _handle_photo_inner(message, bot, state_manager, photo, user, image_path)
+    finally:
+        _stop_typing.set()
+        _typing_task.cancel()
+
+
+async def _handle_photo_inner(message, bot, state_manager, photo, user, image_path) -> None:
+    """Asosiy photo processing logikasi (typing loop tashqarida)."""
 
     try:
         await bot.download(photo, destination=image_path)

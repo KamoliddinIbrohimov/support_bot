@@ -5,7 +5,8 @@ import random
 from datetime import datetime, timezone
 from time import monotonic
 
-from aiogram import F, Router
+from aiogram import Bot, F, Router
+from aiogram.enums import ChatAction
 from aiogram.types import Message
 from rapidfuzz import fuzz
 
@@ -146,6 +147,7 @@ async def _call_support(message: Message, lang: str, client_text: str) -> None:
 
 async def _delayed_reply(
     message: Message,
+    bot: Bot,
     lang: str,
     result: ClassifyResult | None,
     text: str,
@@ -155,6 +157,12 @@ async def _delayed_reply(
     try:
         await asyncio.sleep(30)
         has_detail = result.has_enough_detail if result else False
+
+        # Izlayotganda "yozmoqda..." ko'rsatish
+        try:
+            await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+        except Exception:
+            pass
 
         # KB dan qidirish
         if has_detail and text:
@@ -244,7 +252,7 @@ def _random_screenshot_hint(lang: str) -> str:
 # ── Main handler ──────────────────────────────────────────────────────────────
 
 @router.message(F.chat.type.in_(_GROUP_TYPES), F.text)
-async def handle_group_text(message: Message, state_manager: StateManager) -> None:
+async def handle_group_text(message: Message, bot: Bot, state_manager: StateManager) -> None:
     user = message.from_user
     if user is None:
         return
@@ -283,7 +291,7 @@ async def handle_group_text(message: Message, state_manager: StateManager) -> No
             lang = await _get_user_lang(user.id) or _detect_lang_simple(text)
             asyncio.create_task(_increment_hit(matched_kw))
             task = asyncio.create_task(
-                _delayed_reply(message, lang, None, text, state_manager, "keyword")
+                _delayed_reply(message, bot, lang, None, text, state_manager, "keyword")
             )
             _pending[chat_id] = task
         return
@@ -357,7 +365,7 @@ async def handle_group_text(message: Message, state_manager: StateManager) -> No
     # Yordam so'rovi → keyword save + 30s timer
     await _save_keyword(text)
     task = asyncio.create_task(
-        _delayed_reply(message, lang, result, text, state_manager, "ai")
+        _delayed_reply(message, bot, lang, result, text, state_manager, "ai")
     )
     _pending[chat_id] = task
     logger.info(
