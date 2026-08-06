@@ -12,7 +12,7 @@ from rapidfuzz import fuzz
 from bot import conversation_tracker, group_cache, resolution_handler, role_cache
 from bot.conversation_tracker import TrackedMsg
 from bot.i18n import t
-from bot.services import kb_client
+from bot.services import ai_answer_service, kb_client
 from bot.services.classifier_service import ClassifyResult, classify
 from bot.state_manager import StateManager
 from bot.utils.formatters import format_match_reply
@@ -170,7 +170,20 @@ async def _delayed_reply(
                 await _log(user=message.from_user, chat_id=message.chat.id,
                            text=text, result=result, action="kb_text_match")
                 return
-            # Detail bor lekin KB miss → support chaqir
+            # Detail bor lekin KB miss → AI mustaqil javob bersin
+            if settings.llm_enabled:
+                from database.connection import get_session
+                from database.repositories import ErrorRepository
+                async with get_session() as session:
+                    errors = list(await ErrorRepository(session).list_all())
+                ai_ans = await ai_answer_service.generate(text, errors, lang)
+                if ai_ans:
+                    await message.reply(ai_ans.text)
+                    await _log(user=message.from_user, chat_id=message.chat.id,
+                               text=text, result=result, action="ai_answer")
+                    logger.info(f"[ai-answer] Matn javob berildi chat={message.chat.id}")
+                    return
+            # AI ham javob bera olmadi → support chaqir
             await _call_support(message, lang, text)
             await _log(user=message.from_user, chat_id=message.chat.id,
                        text=text, result=result, action="called_support")

@@ -5,6 +5,7 @@ from aiogram.types import Message, PhotoSize
 
 from bot import conversation_tracker, group_cache, role_cache
 from bot.conversation_tracker import TrackedMsg
+from bot.services import ai_answer_service
 from bot.i18n import t
 from bot.services import ErrorFinderService
 from bot.services import relevance_service, vision_service
@@ -197,27 +198,34 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
             await message.reply(reply_text)
         return
 
-    # ── Not found ─────────────────────────────────────────────────────────────
+    # ── Not found — AI mustaqil javob beradi ─────────────────────────────────
     await _log(message, str(image_path), ocr_text or None, None, None, None, "not_found")
 
     is_group = message.chat.type in ("group", "supergroup")
 
+    # AI javob urinish (OCR matn bo'lsa)
+    if ocr_text and settings.llm_enabled:
+        ai_ans = await ai_answer_service.generate(ocr_text, errors, lang)
+        if ai_ans:
+            await message.reply(ai_ans.text)
+            logger.info(f"[ai-answer] Screenshot javob berildi chat={message.chat.id}")
+            return
+
     if is_group:
-        # Guruhda: matn ko'rsatmaymiz, support ni chaqiramiz
+        # AI ham javob bera olmadi → support chaqir
         mentions = role_cache.get_support_mentions()
         mention_str = " ".join(mentions) if mentions else ""
         if lang == "ru":
             call_text = (
-                f"❓ Не удалось найти решение по данному скриншоту.\n"
+                "❓ Не удалось найти решение по данному скриншоту.\n"
                 + (f"{mention_str} — нужна помощь!" if mention_str else "Обратитесь к администратору.")
             )
         else:
             call_text = (
-                f"❓ Screenshot bo'yicha yechim topilmadi.\n"
+                "❓ Screenshot bo'yicha yechim topilmadi.\n"
                 + (f"{mention_str} — yordam kerak!" if mention_str else "Iltimos, administratorga murojat qiling.")
             )
         await message.reply(call_text)
-        # Suhbatni kuzatishni boshlash
         full_name = " ".join(filter(None, [user.first_name, user.last_name])) or str(user.id)
         conversation_tracker.start(
             message.chat.id,
