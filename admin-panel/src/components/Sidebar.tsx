@@ -1,8 +1,7 @@
 "use client";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
-import Cookies from "js-cookie";
-import { LayoutDashboard, Database, Users, LogOut } from "lucide-react";
+import { usePathname } from "next/navigation";
+import { LayoutDashboard, Database, Users } from "lucide-react";
 
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -12,12 +11,6 @@ const links = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
-
-  const logout = () => {
-    Cookies.remove("admin_token");
-    router.push("/login");
-  };
 
   return (
     <aside className="w-56 min-h-screen bg-card border-r border-rim flex flex-col py-6 px-3 shrink-0">
@@ -46,13 +39,6 @@ export function Sidebar() {
         })}
       </nav>
 
-      <button
-        onClick={logout}
-        className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-dim hover:bg-card2 hover:text-ink transition-colors w-full"
-      >
-        <LogOut size={17} />
-        Chiqish
-      </button>
     </aside>
   );
 }

@@ -5,21 +5,9 @@ const BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 const api = axios.create({ baseURL: BASE });
 
-api.interceptors.request.use((config) => {
-  const token = Cookies.get("admin_token");
-  if (token) config.headers.Authorization = `Bearer ${token}`;
-  return config;
-});
-
 api.interceptors.response.use(
   (r) => r,
-  (err) => {
-    if (err.response?.status === 401 || err.response?.status === 403) {
-      Cookies.remove("admin_token");
-      window.location.href = "/login";
-    }
-    return Promise.reject(err);
-  }
+  (err) => Promise.reject(err)
 );
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
