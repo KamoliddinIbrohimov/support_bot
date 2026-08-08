@@ -3,5 +3,18 @@
 @tailwind utilities;
 
 body {
-  @apply bg-gray-50 text-gray-900;
+  background-color: #0d0d0f;
+  color: #f2f2f3;
 }
+
+input,
+textarea,
+select {
+  color-scheme: dark;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #0d0d0f; }
+::-webkit-scrollbar-thumb { background: #26262b; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #36363c; }

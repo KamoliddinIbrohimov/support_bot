@@ -15,6 +15,6 @@ export function AuthGuard({ children }: { children: React.ReactNode }) {
     }
   }, [router]);
 
-  if (!ready) return null;
+  if (!ready) return <div className="min-h-screen bg-page" />;
   return <>{children}</>;
 }

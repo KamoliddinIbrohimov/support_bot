@@ -5,24 +5,26 @@ import { AuthGuard } from "@/components/AuthGuard";
 import { getOverview, getTimeline, getTopErrors } from "@/lib/api";
 import type { OverviewStats, DailyPoint, TopError } from "@/lib/types";
 import {
-  LineChart,
-  Line,
-  XAxis,
-  YAxis,
-  Tooltip,
-  ResponsiveContainer,
-  CartesianGrid,
-  Legend,
+  LineChart, Line, XAxis, YAxis, Tooltip,
+  ResponsiveContainer, CartesianGrid, Legend,
 } from "recharts";
 
 function StatCard({ label, value }: { label: string; value: string | number }) {
   return (
-    <div className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
-      <p className="text-xs text-gray-500 uppercase tracking-wide">{label}</p>
-      <p className="text-2xl font-bold mt-1 text-gray-900">{value}</p>
+    <div className="bg-card border border-rim rounded-xl p-5">
+      <p className="text-xs text-dim uppercase tracking-wide">{label}</p>
+      <p className="text-2xl font-bold mt-1 text-ink">{value}</p>
     </div>
   );
 }
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "#17171a",
+  border: "1px solid #26262b",
+  borderRadius: 8,
+  color: "#f2f2f3",
+  fontSize: 12,
+};
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<OverviewStats | null>(null);
@@ -40,98 +42,79 @@ export default function DashboardPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen">
+      <div className="flex min-h-screen bg-page">
         <Sidebar />
         <main className="flex-1 p-8 space-y-8 overflow-auto">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">Dashboard</h1>
-            <p className="text-sm text-gray-500 mt-1">Bot faoliyati umumiy ko&apos;rinishi</p>
+            <h1 className="text-xl font-bold text-ink">Dashboard</h1>
+            <p className="text-sm text-dim mt-0.5">Bot faoliyati umumiy ko&apos;rinishi</p>
           </div>
 
           {loading ? (
-            <div className="text-gray-400 text-sm">Yuklanmoqda…</div>
+            <p className="text-dim text-sm">Yuklanmoqda…</p>
           ) : (
             <>
               {stats && (
-                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-                  <StatCard label="Bugungi savollar" value={stats.today_questions} />
-                  <StatCard label="Jami guruhlar" value={stats.total_groups} />
-                  <StatCard label="Faol guruhlar" value={stats.approved_groups} />
-                  <StatCard label="Xatolar bazasi" value={stats.total_errors_in_db} />
-                  <StatCard
-                    label="Hal etish foizi"
-                    value={`${stats.resolution_rate_percent}%`}
-                  />
-                  <StatCard
-                    label="O'rtacha javob"
-                    value={
-                      stats.avg_response_time_sec != null
-                        ? `${stats.avg_response_time_sec}s`
-                        : "—"
-                    }
-                  />
+                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+                  <StatCard label="Bugungi savollar"  value={stats.today_questions} />
+                  <StatCard label="Jami guruhlar"     value={stats.total_groups} />
+                  <StatCard label="Faol guruhlar"     value={stats.approved_groups} />
+                  <StatCard label="Xatolar bazasi"    value={stats.total_errors_in_db} />
+                  <StatCard label="Hal etish %"       value={`${stats.resolution_rate_percent}%`} />
+                  <StatCard label="O'rtacha javob"    value={stats.avg_response_time_sec != null ? `${stats.avg_response_time_sec}s` : "—"} />
                 </div>
               )}
 
-              <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-                <h2 className="text-base font-semibold text-gray-800 mb-5">
-                  So&apos;nggi 7 kun — savollar va hal etilganlar
+              <div className="bg-card border border-rim rounded-xl p-6">
+                <h2 className="text-sm font-semibold text-ink mb-5">
+                  So&apos;nggi 7 kun
                 </h2>
                 <ResponsiveContainer width="100%" height={220}>
-                  <LineChart data={timeline} margin={{ top: 5, right: 10, left: -10, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                  <LineChart data={timeline} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#26262b" strokeOpacity={0.6} />
                     <XAxis
                       dataKey="date"
-                      tick={{ fontSize: 11, fill: "#9ca3af" }}
+                      tick={{ fontSize: 11, fill: "#9a9aa0" }}
+                      axisLine={{ stroke: "#26262b" }}
+                      tickLine={false}
                       tickFormatter={(v) => v.slice(5)}
                     />
-                    <YAxis tick={{ fontSize: 11, fill: "#9ca3af" }} allowDecimals={false} />
-                    <Tooltip
-                      contentStyle={{ fontSize: 12, borderRadius: 8 }}
-                      formatter={(v: number, name: string) => [v, name]}
+                    <YAxis
+                      tick={{ fontSize: 11, fill: "#9a9aa0" }}
+                      axisLine={false}
+                      tickLine={false}
+                      allowDecimals={false}
                     />
-                    <Legend iconSize={10} wrapperStyle={{ fontSize: 12 }} />
-                    <Line
-                      type="monotone"
-                      dataKey="questions"
-                      stroke="#2563eb"
-                      strokeWidth={2}
-                      name="Savollar"
-                      dot={false}
+                    <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ stroke: "#26262b" }} />
+                    <Legend
+                      iconSize={10}
+                      wrapperStyle={{ fontSize: 12, color: "#9a9aa0" }}
                     />
-                    <Line
-                      type="monotone"
-                      dataKey="resolved"
-                      stroke="#16a34a"
-                      strokeWidth={2}
-                      name="Hal etildi"
-                      dot={false}
-                    />
+                    <Line type="monotone" dataKey="questions" stroke="#1d9e75" strokeWidth={2} name="Savollar" dot={false} />
+                    <Line type="monotone" dataKey="resolved"  stroke="#378add" strokeWidth={2} name="Hal etildi" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
 
-              <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
-                <h2 className="text-base font-semibold text-gray-800 mb-4">Top xatolar</h2>
+              <div className="bg-card border border-rim rounded-xl p-6">
+                <h2 className="text-sm font-semibold text-ink mb-4">Top xatolar</h2>
                 {topErrors.length === 0 ? (
-                  <p className="text-sm text-gray-400">Ma&apos;lumot yo&apos;q</p>
+                  <p className="text-dim text-sm">Ma&apos;lumot yo&apos;q</p>
                 ) : (
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-left text-gray-400 border-b text-xs uppercase tracking-wide">
-                        <th className="pb-2 w-8">#</th>
-                        <th className="pb-2">Xato</th>
-                        <th className="pb-2 text-right">Murojaatlar</th>
+                      <tr className="text-left border-b border-rim">
+                        <th className="pb-2 text-xs text-dim font-medium w-8">#</th>
+                        <th className="pb-2 text-xs text-dim font-medium">Xato</th>
+                        <th className="pb-2 text-xs text-dim font-medium text-right">Murojaatlar</th>
                       </tr>
                     </thead>
                     <tbody>
                       {topErrors.map((e, i) => (
-                        <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
-                          <td className="py-2.5 text-gray-400 text-xs">{i + 1}</td>
-                          <td className="py-2.5 font-medium">{e.title}</td>
-                          <td className="py-2.5 text-right font-bold text-blue-600">
-                            {e.count}
-                          </td>
+                        <tr key={i} className="border-b border-rim/50 last:border-0">
+                          <td className="py-2.5 text-dim text-xs">{i + 1}</td>
+                          <td className="py-2.5 text-ink">{e.title}</td>
+                          <td className="py-2.5 text-right font-bold text-ac">{e.count}</td>
                         </tr>
                       ))}
                     </tbody>

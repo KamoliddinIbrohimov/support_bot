@@ -6,8 +6,8 @@ import { LayoutDashboard, Database, Users, LogOut } from "lucide-react";
 
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/errors", label: "Xatolar", icon: Database },
-  { href: "/groups", label: "Guruhlar", icon: Users },
+  { href: "/errors",    label: "Xatolar",   icon: Database },
+  { href: "/groups",    label: "Guruhlar",  icon: Users },
 ];
 
 export function Sidebar() {
@@ -20,34 +20,37 @@ export function Sidebar() {
   };
 
   return (
-    <aside className="w-56 min-h-screen bg-gray-900 text-white flex flex-col py-6 px-3 shrink-0">
+    <aside className="w-56 min-h-screen bg-card border-r border-rim flex flex-col py-6 px-3 shrink-0">
       <div className="px-3 mb-8">
-        <p className="text-lg font-bold">POS Admin</p>
-        <p className="text-xs text-gray-500 mt-0.5">Support Panel</p>
+        <p className="text-base font-bold text-ink">POS Admin</p>
+        <p className="text-xs text-dim mt-0.5">Support Panel</p>
       </div>
 
-      <nav className="flex-1 space-y-1">
-        {links.map(({ href, label, icon: Icon }) => (
-          <Link
-            key={href}
-            href={href}
-            className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
-              pathname === href
-                ? "bg-blue-600 text-white"
-                : "text-gray-400 hover:bg-gray-800 hover:text-white"
-            }`}
-          >
-            <Icon size={18} />
-            {label}
-          </Link>
-        ))}
+      <nav className="flex-1 space-y-0.5">
+        {links.map(({ href, label, icon: Icon }) => {
+          const active = pathname === href;
+          return (
+            <Link
+              key={href}
+              href={href}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                active
+                  ? "bg-ac/10 text-ac"
+                  : "text-dim hover:bg-card2 hover:text-ink"
+              }`}
+            >
+              <Icon size={17} />
+              {label}
+            </Link>
+          );
+        })}
       </nav>
 
       <button
         onClick={logout}
-        className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-gray-400 hover:bg-gray-800 hover:text-white transition-colors w-full"
+        className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm text-dim hover:bg-card2 hover:text-ink transition-colors w-full"
       >
-        <LogOut size={18} />
+        <LogOut size={17} />
         Chiqish
       </button>
     </aside>

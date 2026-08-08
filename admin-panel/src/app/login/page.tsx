@@ -4,6 +4,10 @@ import { useRouter } from "next/navigation";
 import Cookies from "js-cookie";
 import { login } from "@/lib/api";
 
+const inputCls =
+  "w-full bg-card2 border border-rim rounded-lg px-3 py-2.5 text-sm text-ink placeholder:text-dim " +
+  "focus:outline-none focus:ring-1 focus:ring-ac focus:border-ac transition-colors";
+
 export default function LoginPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
@@ -19,50 +23,51 @@ export default function LoginPage() {
       const res = await login(username, password);
       Cookies.set("admin_token", res.data.access_token, { expires: 1 });
       router.replace("/dashboard");
-    } catch {
-      setError("Login yoki parol noto'g'ri");
+    } catch (e: unknown) {
+      const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(detail || "Неверный логин или пароль");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-100 to-gray-200">
-      <div className="bg-white p-10 rounded-2xl shadow-lg w-full max-w-sm space-y-6">
+    <div className="min-h-screen flex items-center justify-center bg-page">
+      <div className="bg-card border border-rim rounded-2xl p-10 w-full max-w-sm space-y-6">
         <div className="text-center space-y-1">
-          <h1 className="text-2xl font-bold text-gray-900">POS Assist</h1>
-          <p className="text-sm text-gray-500">Admin Panel</p>
+          <h1 className="text-2xl font-bold text-ink">POS Assist</h1>
+          <p className="text-sm text-dim">Admin Panel</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-600">Login</label>
+            <label className="text-xs font-medium text-dim">Login</label>
             <input
               type="text"
               autoComplete="username"
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={inputCls}
               placeholder="admin"
             />
           </div>
 
           <div className="space-y-1">
-            <label className="text-xs font-medium text-gray-600">Parol</label>
+            <label className="text-xs font-medium text-dim">Parol</label>
             <input
               type="password"
               autoComplete="current-password"
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className={inputCls}
               placeholder="••••••••"
             />
           </div>
 
           {error && (
-            <p className="text-sm text-red-500 bg-red-50 rounded-lg px-4 py-2 text-center">
+            <p className="text-sm text-red-400 bg-red-900/20 border border-red-800/30 rounded-lg px-4 py-2 text-center">
               {error}
             </p>
           )}
@@ -70,9 +75,9 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full bg-blue-600 text-white py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition-colors"
+            className="w-full bg-ac hover:bg-ac-h text-white py-2.5 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
           >
-            {loading ? "Kirilmoqda…" : "Kirish"}
+            {loading ? "Вход…" : "Войти"}
           </button>
         </form>
       </div>
