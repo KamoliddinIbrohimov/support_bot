@@ -7,14 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System dependencies for OpenCV, EasyOCR, Pillow
+# System dependencies for Pillow
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential \
-        libgl1 \
-        libglib2.0-0 \
-        libsm6 \
-        libxext6 \
-        libxrender1 \
         libjpeg-dev \
         zlib1g-dev \
         curl \

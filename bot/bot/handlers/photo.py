@@ -13,7 +13,7 @@ from bot.handlers.group_message import mark_solved, start_followup
 from bot.i18n import t
 from bot.services import ErrorFinderService
 from bot.services import relevance_service, vision_service
-from bot.services.ocr_service import claude_ocr, easyocr_only
+from bot.services.ocr_service import claude_ocr
 from bot.services import kb_client
 from bot.handlers.group_message import cancel_pending
 from bot.state_manager import StateManager
@@ -93,29 +93,30 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
 
     await _update_user_lang(user.id, user.username, lang)
 
-    # ── Step 1: EasyOCR (lokal, bepul) ───────────────────────────────────────
-    ocr_text, ocr_conf = await easyocr_only(image_path)
-    ocr_source = "easyocr"
+    # ── Step 1: AI OCR ───────────────────────────────────────────────────────
+    ocr_text = await claude_ocr(image_path) if settings.vision_enabled else ""
 
-    # ── Step 2: Relevance check (text mavjud bo'lsa) ──────────────────────────
+    # ── Step 2: Relevance check ───────────────────────────────────────────────
     if ocr_text:
         is_relevant = await relevance_service.check_relevance(ocr_text=ocr_text)
         if not is_relevant:
-            await _log(message, str(image_path), ocr_text, ocr_conf, None, None, "out_of_scope")
+            await _log(message, str(image_path), ocr_text, None, None, None, "out_of_scope")
             await message.reply(t("out_of_scope", lang))
             return
     elif not settings.vision_enabled:
-        # OCR text yo'q va Vision AI yo'q — hech narsa qila olmaymiz
         await _log(message, str(image_path), None, None, None, None, "not_found")
         await message.reply(format_empty_ocr_reply(lang))
         return
 
     # ── Step 3: KB semantic search ────────────────────────────────────────────
+    async with get_session() as session:
+        errors = list(await ErrorRepository(session).list_all())
+
     if ocr_text:
         kb_match = await kb_client.search(ocr_text, lang)
         if kb_match:
             logger.info(f"KB hit: similarity={kb_match.similarity:.2f}")
-            await _log(message, str(image_path), ocr_text, ocr_conf, None, kb_match.similarity, "kb_match")
+            await _log(message, str(image_path), ocr_text, None, None, kb_match.similarity, "kb_match")
             await message.reply(format_match_reply(
                 title=kb_match.title or "KB",
                 detected_text=ocr_text,
@@ -123,19 +124,15 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
                 score=kb_match.similarity * 100,
                 lang=lang,
             ))
-            # KB da video yo'q
             return
 
     # ── Step 4: Fuzzy match (Error DB) ───────────────────────────────────────
-    async with get_session() as session:
-        errors = list(await ErrorRepository(session).list_all())
-
     if ocr_text:
         fuzzy = error_finder.find_best(ocr_text, errors, lang)
         if fuzzy:
             await _log(
-                message, str(image_path), ocr_text, ocr_conf,
-                fuzzy.error.id, float(fuzzy.score), f"fuzzy_{ocr_source}",
+                message, str(image_path), ocr_text, None,
+                fuzzy.error.id, float(fuzzy.score), "fuzzy_ai",
             )
             reply_text = format_match_reply(
                 title=fuzzy.error.get_title(lang),
@@ -151,60 +148,7 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
             start_followup(message, lang)
             return
 
-    # ── Step 5: AI OCR fallback — faqat KB+fuzzy fail bo'lgandan keyin ────────
-    if settings.vision_enabled:
-        logger.info("AI OCR: KB/fuzzy match topilmadi — AI bilan qayta o'qish")
-        ai_text = await claude_ocr(image_path)
-
-        if ai_text and ai_text != ocr_text:
-            prev_empty = not ocr_text
-            ocr_text = ai_text
-            ocr_source = "ai"
-
-            # Relevance re-check faqat avval text bo'lmagan bo'lsa
-            if prev_empty:
-                is_relevant = await relevance_service.check_relevance(ocr_text=ocr_text)
-                if not is_relevant:
-                    await _log(message, str(image_path), ocr_text, None, None, None, "out_of_scope")
-                    await message.reply(t("out_of_scope", lang))
-                    return
-
-            # KB re-search
-            kb_match = await kb_client.search(ocr_text, lang)
-            if kb_match:
-                logger.info(f"KB hit (AI OCR): similarity={kb_match.similarity:.2f}")
-                await _log(message, str(image_path), ocr_text, None, None, kb_match.similarity, "kb_match")
-                await message.reply(format_match_reply(
-                    title=kb_match.title or "KB",
-                    detected_text=ocr_text,
-                    solution=kb_match.solution,
-                    score=kb_match.similarity * 100,
-                    lang=lang,
-                ))
-                return
-
-            # Fuzzy re-match
-            fuzzy = error_finder.find_best(ocr_text, errors, lang)
-            if fuzzy:
-                await _log(
-                    message, str(image_path), ocr_text, None,
-                    fuzzy.error.id, float(fuzzy.score), "fuzzy_ai",
-                )
-                reply_text = format_match_reply(
-                    title=fuzzy.error.get_title(lang),
-                    detected_text=ocr_text,
-                    solution=fuzzy.error.get_solution(lang),
-                    score=fuzzy.score,
-                    lang=lang,
-                )
-                sent = await _send_media_with_caption(message, fuzzy.error, reply_text)
-                if not sent:
-                    await message.reply(reply_text)
-                mark_solved(message.chat.id, user.id)
-                start_followup(message, lang)
-                return
-
-    # ── Step 6: Vision AI — so'nggi chora ────────────────────────────────────
+    # ── Step 5: Vision AI — to'liq rasm tahlili ──────────────────────────────
     vision = await vision_service.identify_error(
         image_path=image_path,
         ocr_text=ocr_text,
