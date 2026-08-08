@@ -45,7 +45,7 @@ services:
     volumes:
       - epos_kb_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER:-kb_user}"]
+      test: ["CMD-SHELL", "pg_isready -U ${KB_POSTGRES_USER:-kb_user} -d ${KB_POSTGRES_DB:-kb}"]
       interval: 5s
       timeout: 5s
       retries: 10
