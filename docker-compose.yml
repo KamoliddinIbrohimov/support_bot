@@ -121,6 +121,20 @@ services:
       - ./bot/logs:/app/logs
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
+  # ── Admin Panel ───────────────────────────────────────────────────────────
+  admin:
+    build:
+      context: ./admin-panel
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_BOT_USERNAME: ${NEXT_PUBLIC_BOT_USERNAME:-POSAssist_bot}
+    container_name: support_admin
+    restart: unless-stopped
+    depends_on:
+      - bot-api
+    ports:
+      - "3000:3000"
+
 volumes:
   epos_bot_postgres_data:
   epos_bot_redis_data:
