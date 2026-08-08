@@ -23,8 +23,8 @@ api.interceptors.response.use(
 );
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
-export const loginWithTelegram = (data: Record<string, string | number>) =>
-  api.post("/admin/auth/telegram", data);
+export const login = (username: string, password: string) =>
+  api.post("/admin/auth/login", { username, password });
 
 // ── Errors ────────────────────────────────────────────────────────────────────
 export const getErrors = (page = 1, pageSize = 20, search = "") =>

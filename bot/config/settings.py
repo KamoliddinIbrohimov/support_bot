@@ -68,8 +68,10 @@ class Settings(BaseSettings):
     KB_API_KEY: str = ""           # API key for this project
     KB_SIMILARITY_THRESHOLD: float = 0.90
 
-    # Admin panel JWT
+    # Admin panel
     JWT_SECRET: str = "change-me-in-production-use-long-random-string"
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_PASSWORD: str = "admin123"
 
     # AI (Google Gemini — classifier + relevance + vision + OCR)
     GOOGLE_API_KEY: str = ""
