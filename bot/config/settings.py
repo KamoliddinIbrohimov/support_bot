@@ -68,6 +68,9 @@ class Settings(BaseSettings):
     KB_API_KEY: str = ""           # API key for this project
     KB_SIMILARITY_THRESHOLD: float = 0.90
 
+    # Admin panel JWT
+    JWT_SECRET: str = "change-me-in-production-use-long-random-string"
+
     # AI (Google Gemini — classifier + relevance + vision + OCR)
     GOOGLE_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""  # ixtiyoriy, Google bo'lsa ishlatilmaydi

@@ -3,8 +3,13 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 
 from api.schemas import ErrorCreate, ErrorRead, HealthResponse, OCRLogRead
+from api.admin import auth as admin_auth
+from api.admin import errors as admin_errors
+from api.admin import groups as admin_groups
+from api.admin import stats as admin_stats
 from config.logger import logger, setup_logging
 from database.connection import get_session
 from database.repositories import ErrorRepository, OCRLogRepository
@@ -20,10 +25,25 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Support Bot API",
-    version="0.1.0",
-    description="Telegram Support Bot uchun REST API — xatoliklarni boshqarish va loglarni ko'rish.",
+    version="0.2.0",
+    description="Telegram Support Bot uchun REST API + Admin Panel",
     lifespan=lifespan,
 )
+
+# CORS — admin panel uchun
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # production da aniq domain ko'rsating
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Admin routers
+app.include_router(admin_auth.router)
+app.include_router(admin_errors.router)
+app.include_router(admin_groups.router)
+app.include_router(admin_stats.router)
 
 
 @app.get("/health", response_model=HealthResponse, tags=["system"])

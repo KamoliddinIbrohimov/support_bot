@@ -156,6 +156,27 @@ class MessageClassification(Base):
         return f"<MsgCls id={self.id} help={self.is_help_request} conf={self.confidence} action={self.action_taken}>"
 
 
+class Conversation(Base):
+    """Tracks each support conversation: start → resolution. Foundation for stats."""
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    error_id: Mapped[int | None] = mapped_column(
+        ForeignKey("errors.id", ondelete="SET NULL"), nullable=True
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    # 'ai' | 'support' | 'manual' | None
+    resolved_by: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    message_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+
+
 class OCRLog(Base):
     __tablename__ = "ocr_logs"
 

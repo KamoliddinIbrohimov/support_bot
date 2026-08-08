@@ -255,11 +255,6 @@ async def _delayed_reply(
         await _log(user=message.from_user, chat_id=message.chat.id,
                    text=text, result=result, action="called_support")
         logger.info(f"Support chaqirildi ({action_tag}) — chat={message.chat.id}")
-        else:
-            # Detail yetarli emas → screenshot hint (varied, majburiy emas)
-            await message.reply(_random_screenshot_hint(lang))
-            await _log(user=message.from_user, chat_id=message.chat.id,
-                       text=text, result=result, action="asked_screenshot_hint")
 
     except asyncio.CancelledError:
         pass
@@ -379,67 +374,6 @@ def _extract_mention_question(message: Message, bot_username: str) -> str | None
     return None
 
 
-@router.message(F.chat.type.in_(_GROUP_TYPES), F.text)
-async def handle_bot_mention(message: Message, bot: Bot, state_manager: StateManager) -> None:
-    """Bot @mention aniqlanganda darhol AI javob beradi."""
-    if not group_cache.is_approved(message.chat.id):
-        return
-
-    bot_username = bot_context.bot_username
-    if not bot_username:
-        return
-
-    question = _extract_mention_question(message, bot_username)
-    if question is None:
-        return  # mention yo'q — keyingi handlerga o'tadi
-
-    user = message.from_user
-    lang = await _get_user_lang(user.id) or _detect_lang_simple(question)
-
-    logger.info(f"[mention] user={user.id} chat={message.chat.id} q={question[:60]!r}")
-
-    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
-
-    # Errors bazasidan kontekst olamiz
-    async with get_session() as session:
-        errors = list(await ErrorRepository(session).list_all())
-
-    # 1. Fuzzy match
-    fuzzy = _error_finder.find_best(question, errors, lang)
-    if fuzzy:
-        reply_text = format_match_reply(
-            title=fuzzy.error.get_title(lang),
-            detected_text=question,
-            solution=fuzzy.error.get_solution(lang),
-            score=fuzzy.score,
-            lang=lang,
-        )
-        await _send_match_with_media(message, fuzzy.error, reply_text)
-        logger.info(f"[mention-fuzzy] chat={message.chat.id} score={fuzzy.score:.0f}")
-        return
-
-    # 2. AI javob
-    ai_ans = await ai_answer_service.generate(question, errors, lang)
-    if ai_ans:
-        await message.reply(ai_ans.text)
-        logger.info(f"[mention] AI javob berdi chat={message.chat.id}")
-        return
-
-    # AI javob bera olmadi → support ni @mention
-    mentions = role_cache.get_support_mentions()
-    if mentions:
-        mention_str = " ".join(mentions)
-        if lang == "ru":
-            await message.reply(f"❓ Точного ответа не нашлось.\n{mention_str} — помогите!")
-        else:
-            await message.reply(f"❓ Aniq javob topilmadi.\n{mention_str} — yordam bering!")
-    else:
-        if lang == "ru":
-            await message.reply("❓ По данному вопросу точного ответа нет. Обратитесь к администратору.")
-        else:
-            await message.reply("❓ Bu savol bo'yicha aniq javob topilmadi. Administratorga murojaat qiling.")
-
-
 # ── Unsupported media handler ─────────────────────────────────────────────────
 
 @router.message(
@@ -480,6 +414,50 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
 
     # ── Xabar keldi — follow-up timer bekor, tracker yangilanadi ─────────────
     cancel_followup(chat_id, user.id)
+
+    # ── @bot_username mention → darhol AI javob (30s kutmasdan) ──────────────
+    bot_username = bot_context.bot_username
+    if bot_username:
+        question = _extract_mention_question(message, bot_username)
+        if question:
+            lang = await _get_user_lang(user.id) or _detect_lang_simple(question)
+            logger.info(f"[mention] user={user.id} chat={chat_id} q={question[:60]!r}")
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+            async with get_session() as session:
+                errors = list(await ErrorRepository(session).list_all())
+            fuzzy = _error_finder.find_best(question, errors, lang)
+            if fuzzy:
+                reply_text = format_match_reply(
+                    title=fuzzy.error.get_title(lang),
+                    detected_text=question,
+                    solution=fuzzy.error.get_solution(lang),
+                    score=fuzzy.score,
+                    lang=lang,
+                )
+                await _send_match_with_media(message, fuzzy.error, reply_text)
+                mark_solved(chat_id, user.id)
+                start_followup(message, lang)
+                return
+            ai_ans = await ai_answer_service.generate(question, errors, lang)
+            if ai_ans:
+                await message.reply(ai_ans.text)
+                mark_solved(chat_id, user.id)
+                start_followup(message, lang)
+                return
+            mentions = role_cache.get_support_mentions()
+            mention_str = " ".join(mentions)
+            if lang == "ru":
+                await message.reply(
+                    f"❓ Точного ответа не нашлось.\n"
+                    + (f"{mention_str} — помогите!" if mention_str else "Обратитесь к администратору.")
+                )
+            else:
+                await message.reply(
+                    f"❓ Aniq javob topilmadi.\n"
+                    + (f"{mention_str} — yordam bering!" if mention_str else "Administratorga murojaat qiling.")
+                )
+            return
+
     is_supp = role_cache.is_support(user.id)
     if conversation_tracker.is_tracking(chat_id):
         conversation_tracker.add(chat_id, _tracked_msg(user, text, is_support=is_supp))
