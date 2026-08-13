@@ -4,6 +4,8 @@ services:
     image: postgres:16-alpine
     container_name: support_postgres
     restart: unless-stopped
+    networks:
+      - support_net
     environment:
       POSTGRES_USER: ${BOT_POSTGRES_USER:-support_user}
       POSTGRES_PASSWORD: ${BOT_POSTGRES_PASSWORD:-support_pass}
@@ -22,8 +24,8 @@ services:
     image: redis:7-alpine
     container_name: support_redis
     restart: unless-stopped
-    ports:
-      - "6379:6379"
+    networks:
+      - support_net
     volumes:
       - epos_bot_redis_data:/data
     healthcheck:
@@ -36,6 +38,8 @@ services:
     image: pgvector/pgvector:pg16
     container_name: kb_postgres
     restart: unless-stopped
+    networks:
+      - support_net
     environment:
       POSTGRES_USER: ${KB_POSTGRES_USER:-kb_user}
       POSTGRES_PASSWORD: ${KB_POSTGRES_PASSWORD:-kb_pass}
@@ -56,6 +60,8 @@ services:
       context: ./kb
     container_name: kb_api
     restart: unless-stopped
+    networks:
+      - support_net
     depends_on:
       kb-postgres:
         condition: service_healthy
@@ -65,8 +71,7 @@ services:
       POSTGRES_HOST: kb-postgres
     ports:
       - "8100:8000"
-    command: >
-      sh -c "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"
+    command: sh -c "until python -c 'import socket; socket.create_connection((\"kb-postgres\", 5432), 2)' 2>/dev/null; do echo 'DB kutilmoqda...'; sleep 5; done && alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"
 
   # ── Support Bot ───────────────────────────────────────────────────────────
   bot:
@@ -78,6 +83,8 @@ services:
       - 8.8.8.8
       - 1.1.1.1
     restart: unless-stopped
+    networks:
+      - support_net
     depends_on:
       postgres:
         condition: service_healthy
@@ -93,6 +100,7 @@ services:
       REDIS_URL: redis://redis:6379/0
       KB_API_URL: http://kb-api:8000
     volumes:
+      - ./bot:/app
       - ./bot/storage:/app/storage
       - ./bot/logs:/app/logs
       - easyocr_models:/root/.EasyOCR
@@ -106,6 +114,8 @@ services:
     image: epos-support-bot:latest
     container_name: support_api
     restart: unless-stopped
+    networks:
+      - support_net
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,23 +127,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - ./bot:/app
       - ./bot/storage:/app/storage
       - ./bot/logs:/app/logs
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000
 
-  # ── Admin Panel ───────────────────────────────────────────────────────────
-  admin:
-    build:
-      context: ./admin-panel
-      args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-        NEXT_PUBLIC_BOT_USERNAME: ${NEXT_PUBLIC_BOT_USERNAME:-POSAssist_bot}
-    container_name: support_admin
-    restart: unless-stopped
-    depends_on:
-      - bot-api
-    ports:
-      - "3000:3000"
+
+networks:
+  support_net:
+    name: support_net
+    driver: bridge
 
 volumes:
   epos_bot_postgres_data:

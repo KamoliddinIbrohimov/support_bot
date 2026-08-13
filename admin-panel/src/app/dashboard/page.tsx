@@ -31,13 +31,17 @@ export default function DashboardPage() {
   const [timeline, setTimeline] = useState<DailyPoint[]>([]);
   const [topErrors, setTopErrors] = useState<TopError[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setError(null);
     Promise.all([
-      getOverview().then((r) => setStats(r.data)),
-      getTimeline(7).then((r) => setTimeline(r.data)),
-      getTopErrors(10).then((r) => setTopErrors(r.data)),
-    ]).finally(() => setLoading(false));
+      getOverview().then((r) => setStats(r.data)).catch(() => null),
+      getTimeline(7).then((r) => setTimeline(r.data)).catch(() => null),
+      getTopErrors(10).then((r) => setTopErrors(r.data)).catch(() => null),
+    ])
+      .catch(() => setError("API bilan bog'lanib bo'lmadi"))
+      .finally(() => setLoading(false));
   }, []);
 
   return (
@@ -52,6 +56,10 @@ export default function DashboardPage() {
 
           {loading ? (
             <p className="text-dim text-sm">Yuklanmoqda…</p>
+          ) : error ? (
+            <div className="bg-red-900/20 border border-red-800/30 rounded-xl p-5 text-sm text-red-300">
+              {error}. Bot API ({process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}) ishlab turganligini tekshiring.
+            </div>
           ) : (
             <>
               {stats && (

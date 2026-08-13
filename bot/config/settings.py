@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     OCR_MIN_CONFIDENCE: float = 0.3
 
     # Matching
-    FUZZY_MATCH_THRESHOLD: int = 70
+    FUZZY_MATCH_THRESHOLD: int = 82
 
     # Storage
     IMAGE_STORAGE_PATH: str = "storage/images"

@@ -16,8 +16,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
-INACTIVITY_SECS = 300  # 5 min silence → analyze
-MIN_MESSAGES = 3        # analysis requires at least 3 messages (client + support)
+INACTIVITY_SECS = 43200  # 12 soat jimlik (tashlab ketilgan suhbat fallback)
+SOLUTION_SECS   = 600    # Support yechim bergandan 10 daqiqa o'tsa → tahlil
+MIN_MESSAGES = 3         # analysis requires at least 3 messages (client + support)
 
 _Callback = Callable[[int, list["TrackedMsg"]], Awaitable[None]]
 
@@ -29,6 +30,8 @@ class TrackedMsg:
     display_name: str
     is_support: bool
     text: str
+    photo_file_id: str | None = None
+    video_file_id: str | None = None
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -37,6 +40,7 @@ class _Convo:
     chat_id: int
     messages: list[TrackedMsg] = field(default_factory=list)
     _task: asyncio.Task | None = field(default=None, repr=False)
+    _solution_task: asyncio.Task | None = field(default=None, repr=False)
 
 
 _active: dict[int, _Convo] = {}
@@ -67,6 +71,18 @@ def add(chat_id: int, msg: TrackedMsg) -> None:
         return
     _active[chat_id].messages.append(msg)
     _reset_timer(chat_id)
+    if msg.is_support and (msg.text or msg.video_file_id or msg.photo_file_id):
+        _start_solution_timer(chat_id)
+
+
+def _start_solution_timer(chat_id: int) -> None:
+    """Support yechim bergandan SOLUTION_SECS o'tsa — tahlil qil."""
+    convo = _active.get(chat_id)
+    if not convo:
+        return
+    if convo._solution_task and not convo._solution_task.done():
+        convo._solution_task.cancel()
+    convo._solution_task = asyncio.create_task(_solution_fire(chat_id))
 
 
 def stop(chat_id: int) -> None:
@@ -100,6 +116,21 @@ async def _inactivity_fire(chat_id: int) -> None:
         await asyncio.sleep(INACTIVITY_SECS)
         convo = _active.pop(chat_id, None)
         if convo and _callback and len(convo.messages) >= MIN_MESSAGES:
+            if convo._solution_task and not convo._solution_task.done():
+                convo._solution_task.cancel()
+            await _callback(chat_id, convo.messages)
+    except asyncio.CancelledError:
+        pass
+
+
+async def _solution_fire(chat_id: int) -> None:
+    """Support yechim bergandan SOLUTION_SECS o'tsa — mijoz tasdiqlamasdan ham tahlil."""
+    try:
+        await asyncio.sleep(SOLUTION_SECS)
+        convo = _active.pop(chat_id, None)
+        if convo and _callback and len(convo.messages) >= MIN_MESSAGES:
+            if convo._task and not convo._task.done():
+                convo._task.cancel()
             await _callback(chat_id, convo.messages)
     except asyncio.CancelledError:
         pass

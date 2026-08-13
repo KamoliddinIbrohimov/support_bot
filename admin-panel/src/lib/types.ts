@@ -1,10 +1,3 @@
-export interface AdminUser {
-  user_id: number;
-  first_name: string;
-  username?: string;
-  access_token: string;
-}
-
 export interface ErrorEntry {
   id: number;
   title_ru: string | null;
@@ -34,9 +27,51 @@ export interface Group {
   added_by_name: string | null;
   added_by_username: string | null;
   status: "pending" | "approved" | "rejected";
+  bot_mode: "learning" | "knowledge" | "express";
+  poster_auto_answer: boolean;
   approved_by: number | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface GroupUserRole {
+  id: number;
+  group_id: number;
+  telegram_user_id: number;
+  username: string | null;
+  full_name: string | null;
+  role: "poster_staff" | "plugin_staff" | "customer";
+  confidence_score: number;
+  is_manual_override: boolean;
+  updated_at: string;
+}
+
+export interface LearningFeedEntry {
+  id: number;
+  group_id: number;
+  question_text: string | null;
+  answer_text: string | null;
+  question_user_id: number | null;
+  answer_user_id: number | null;
+  question_username: string | null;
+  answer_username: string | null;
+  is_confirmed: boolean;
+  created_at: string;
+}
+
+export interface GroupDetailStats {
+  chat_id: number;
+  title: string | null;
+  status: string;
+  bot_mode: string;
+  poster_auto_answer: boolean;
+  total_questions: number;
+  resolved_by_ai: number;
+  resolved_by_support: number;
+  unresolved: number;
+  resolution_rate: number;
+  top_errors: { error_id: number | null; title: string; count: number }[];
+  timeline: { date: string; questions: number }[];
 }
 
 export interface OverviewStats {

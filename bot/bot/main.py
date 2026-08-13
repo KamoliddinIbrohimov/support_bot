@@ -8,11 +8,27 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
+from aiogram import BaseMiddleware
+from aiogram.types import Update
+
 from bot import bot_context
 from bot.handlers import get_all_routers
 from bot.state_manager import StateManager
 from config.logger import logger, setup_logging
 from config.settings import settings
+
+
+class DebugMiddleware(BaseMiddleware):
+    async def __call__(self, handler, event: Update, data: dict):
+        msg = getattr(event, "message", None)
+        if msg and getattr(msg.chat, "type", None) in ("group", "supergroup"):
+            logger.info(
+                f"[DBG-MW] chat={msg.chat.id} user={getattr(msg.from_user, 'id', '?')} "
+                f"photo={bool(msg.photo)} doc={bool(msg.document)} "
+                f"text={bool(msg.text)} caption={str(msg.caption or '')[:40]!r} "
+                f"reply={bool(msg.reply_to_message)} forward={bool(msg.forward_date)}"
+            )
+        return await handler(event, data)
 
 
 async def on_startup(bot: Bot) -> None:
@@ -47,6 +63,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dp = Dispatcher(storage=storage)
+    dp.update.outer_middleware(DebugMiddleware())
 
     # Inject state_manager so handlers can receive it via DI
     dp["state_manager"] = state_manager

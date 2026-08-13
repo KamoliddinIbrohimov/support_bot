@@ -24,6 +24,7 @@ from database.connection import get_session
 from database.models import User
 from database.repositories import (
     ErrorRepository,
+    GroupUserRoleRepository,
     HelpKeywordRepository,
     MessageClassificationRepository,
     UserRepository,
@@ -38,6 +39,10 @@ KEYWORD_FUZZY_THRESHOLD = 75
 
 # (chat_id, user_id) → task: har bir foydalanuvchi alohida kuzatiladi
 _pending: dict[tuple[int, int], asyncio.Task] = {}
+
+# Manosiz savol counter — (chat_id, user_id) → ketma-ket javobsiz savollar
+_no_answer_count: dict[tuple[int, int], int] = {}
+NO_ANSWER_LIMIT = 3  # Bu miqdordan oshsa supportni chaqiradi
 
 # Bot yechim bergan vaqt (gratitude va follow-up uchun)
 _solved_at: dict[tuple[int, int], float] = {}
@@ -142,11 +147,81 @@ async def _save_keyword(phrase: str) -> None:
         logger.warning(f"Keyword saqlanmadi: {exc}")
 
 
+# ── Learning mode handler ──────────────────────────────────────────────────────
+
+async def _handle_learning(message: Message, chat_id: int, user: object, text: str) -> None:
+    """Learning rejimida barcha xabarlarni tahlil qilib, tracker ga yozadi.
+    Javob bermaydi — faqat kuzatadi va suhbat tugagach AI ga yuboradi.
+    """
+    if not settings.llm_enabled:
+        return
+
+    result = await classify(text)
+    lang = _lang(result.language)
+    await _update_user_lang(user.id, user.username, lang)
+
+    # Rol aniqlash
+    full_name = " ".join(filter(None, [
+        getattr(user, "first_name", None),
+        getattr(user, "last_name", None),
+    ])) or None
+
+    is_supp_msg = result.is_support_message or result.message_type == "solution"
+
+    if is_supp_msg:
+        changed = role_cache.set_user_role(
+            chat_id, user.id, "plugin_staff",
+            username=getattr(user, "username", None), full_name=full_name,
+        )
+        if changed:
+            asyncio.create_task(_save_role(
+                group_id=chat_id, user=user, role="plugin_staff",
+                confidence=result.confidence,
+            ))
+    elif result.is_help_request and result.confidence >= CONFIDENCE_THRESHOLD:
+        changed = role_cache.set_user_role(
+            chat_id, user.id, "customer",
+            username=getattr(user, "username", None), full_name=full_name,
+        )
+        if changed:
+            asyncio.create_task(_save_role(
+                group_id=chat_id, user=user, role="customer",
+                confidence=result.confidence,
+            ))
+
+    # Suhbatni tracker ga qo'shish
+    tracked = _tracked_msg(user, text, is_support=is_supp_msg)
+    if conversation_tracker.is_tracking(chat_id):
+        conversation_tracker.add(chat_id, tracked)
+    else:
+        conversation_tracker.start(chat_id, tracked)
+
+    logger.info(
+        f"[learning] user={user.id} chat={chat_id} "
+        f"type={result.message_type} support={is_supp_msg} conf={result.confidence:.2f}"
+    )
+    await _log(user=user, chat_id=chat_id, text=text, result=result, action="learning")
+
+    # Mijoz "hal bo'ldi / rahmat" desa — kutmasdan darhol tahlil
+    if (
+        result.message_type == "resolved"
+        and result.confidence >= 0.75
+        and not is_supp_msg
+        and conversation_tracker.is_tracking(chat_id)
+    ):
+        messages = conversation_tracker.stop_and_get(chat_id)
+        logger.info(
+            f"[learning] resolved signal — darhol tahlil boshlandi "
+            f"chat={chat_id} ({len(messages)} xabar)"
+        )
+        asyncio.create_task(resolution_handler.on_resolved(chat_id, messages))
+
+
 # ── @mention support + tracker ────────────────────────────────────────────────
 
 async def _call_support(message: Message, lang: str, client_text: str) -> None:
     """Support topilmasa @mention bilan chaqiradi va suhbatni kuzatishni boshlaydi."""
-    mentions = role_cache.get_support_mentions()
+    mentions = role_cache.get_support_mentions(message.chat.id)
     user = message.from_user
 
     if mentions:
@@ -164,7 +239,7 @@ async def _call_support(message: Message, lang: str, client_text: str) -> None:
         await message.reply(text)
     else:
         # Support aniqlanmagan → screenshot hint (varied)
-        await message.reply(_random_screenshot_hint(lang))
+        await message.answer(_random_screenshot_hint(lang))
         return
 
     # Suhbatni kuzatishni boshlash
@@ -187,9 +262,10 @@ async def _delayed_reply(
     text: str,
     state_manager: StateManager,
     action_tag: str,
+    delay: int = 30,
 ) -> None:
     try:
-        await asyncio.sleep(30)
+        await asyncio.sleep(delay)
         has_detail = result.has_enough_detail if result else False
 
         # Izlayotganda "yozmoqda..." ko'rsatish
@@ -281,16 +357,16 @@ _GREETINGS = {
 
 _SCREENSHOT_HINTS = {
     "uz": [
-        "Xatolik screenshotini yuboring — qarab beraman. 📸",
-        "Screenshot tashlasangiz, tezroq yordam bera olaman.",
-        "Muammo screenshotini yuboring. 🖼",
-        "Agar xatolik ekranda ko'rinsa — screenshot yuboring.",
+        "Xatolik rasmini yuboring yoki xatolik matnini yozib yuboring — qarab beraman. 📸",
+        "Kassadagi xatolik rasmini yoki xatolik matnini yozib yuboring, tezroq yordam beraman.",
+        "Ekrandagi xatolik rasmini yuboring yoki xatolik kodini yozib yuboring. 🖼",
+        "Xatolik rasmini yuboring yoki xatolik matnini yozib yuboring — tekshirib ko'raman.",
     ],
     "ru": [
-        "Пришлите скриншот ошибки — разберёмся. 📸",
-        "Отправьте скриншот — помогу быстрее.",
-        "Скриншот проблемы поможет разобраться. 🖼",
-        "Если ошибка на экране — скиньте скриншот.",
+        "Пришлите фото ошибки или напишите текст ошибки — разберёмся. 📸",
+        "Отправьте фото с экрана или напишите текст ошибки — помогу быстрее.",
+        "Сфотографируйте ошибку или напишите код ошибки. 🖼",
+        "Пришлите фото ошибки или напишите текст ошибки — проверим.",
     ],
 }
 
@@ -332,8 +408,8 @@ _FOLLOWUP_MSGS = {
 }
 
 _UNSUPPORTED_MEDIA = {
-    "uz": "📸 Iltimos, xatolikni <b>screenshot</b> (rasm) yoki <b>matn</b> ko'rinishida yuboring.",
-    "ru": "📸 Пожалуйста, отправьте ошибку в виде <b>скриншота</b> или <b>текста</b>.",
+    "uz": "📸 Iltimos, xatolik <b>rasmini</b> yuboring yoki xatolik <b>matnini</b> yozing.",
+    "ru": "📸 Пожалуйста, отправьте <b>фото ошибки</b> или напишите <b>текст ошибки</b>.",
 }
 
 
@@ -370,7 +446,7 @@ def _extract_mention_question(message: Message, bot_username: str) -> str | None
                 question = message.text.replace(
                     message.text[ent.offset: ent.offset + ent.length], ""
                 ).strip()
-                return question or None
+                return question  # "" bo'lsa ham None emas — mention aniqlandi
     return None
 
 
@@ -383,10 +459,29 @@ def _extract_mention_question(message: Message, bot_username: str) -> str | None
 async def handle_unsupported_media(message: Message) -> None:
     if not group_cache.is_approved(message.chat.id):
         return
-    if role_cache.get_mode(message.chat.id) == "observing":
-        return
     user = message.from_user
-    if user is None or role_cache.is_support(user.id):
+    if user is None:
+        return
+
+    mode = role_cache.get_mode(message.chat.id)
+
+    # Learning mode: support videosini tracker ga qo'shish
+    if mode == "learning" and message.video and role_cache.is_support(message.chat.id, user.id):
+        full_name = " ".join(filter(None, [user.first_name, user.last_name])) or str(user.id)
+        caption = message.caption or ""
+        tracked = _tracked_msg(user, f"[Support videosi]{': ' + caption if caption else ''}", is_support=True)
+        tracked.video_file_id = message.video.file_id
+        if conversation_tracker.is_tracking(message.chat.id):
+            conversation_tracker.add(message.chat.id, tracked)
+        else:
+            conversation_tracker.start(message.chat.id, tracked)
+        logger.info(f"[learning] Support video tracker ga qo'shildi chat={message.chat.id}")
+        return
+
+    if mode == "learning":
+        return
+
+    if role_cache.is_support(message.chat.id, user.id):
         return  # support xodimining mediasiga aralashmaymiz
     # Stiker — javob bermaymiz
     if message.sticker or message.animation:
@@ -412,19 +507,33 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
     if not text:
         return
 
-    # ── Xabar keldi — follow-up timer bekor, tracker yangilanadi ─────────────
+    # ── Xabar keldi — follow-up timer bekor ──────────────────────────────────
     cancel_followup(chat_id, user.id)
 
-    # ── @bot_username mention → darhol AI javob (30s kutmasdan) ──────────────
+    # ── @bot_username mention → barcha rejimlarda darhol javob ───────────────
     bot_username = bot_context.bot_username
     if bot_username:
         question = _extract_mention_question(message, bot_username)
-        if question:
+        if question is not None:
             lang = await _get_user_lang(user.id) or _detect_lang_simple(question)
             logger.info(f"[mention] user={user.id} chat={chat_id} q={question[:60]!r}")
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
             async with get_session() as session:
                 errors = list(await ErrorRepository(session).list_all())
+
+            # Reply dagi rasm bo'lsa — OCR qilib savolga qo'shamiz
+            replied = message.reply_to_message
+            if replied and replied.photo:
+                ocr_text = await _ocr_replied_photo(replied, bot)
+                if ocr_text:
+                    logger.info(f"[mention] reply-photo OCR: {len(ocr_text)} belgi")
+                    question = ocr_text if not question.strip() else f"{question}\n[Rasm]: {ocr_text}"
+
+            # Savol bo'sh va rasm yo'q → screenshot so'rash
+            if not question.strip():
+                await message.answer(_random_screenshot_hint(lang))
+                return
+
             fuzzy = _error_finder.find_best(question, errors, lang)
             if fuzzy:
                 reply_text = format_match_reply(
@@ -444,45 +553,39 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
                 mark_solved(chat_id, user.id)
                 start_followup(message, lang)
                 return
-            mentions = role_cache.get_support_mentions()
-            mention_str = " ".join(mentions)
-            if lang == "ru":
-                await message.reply(
-                    f"❓ Точного ответа не нашлось.\n"
-                    + (f"{mention_str} — помогите!" if mention_str else "Обратитесь к администратору.")
-                )
-            else:
-                await message.reply(
-                    f"❓ Aniq javob topilmadi.\n"
-                    + (f"{mention_str} — yordam bering!" if mention_str else "Administratorga murojaat qiling.")
-                )
+            # AI ham javob bera olmadi — screenshot so'rash (support emas)
+            await message.answer(_random_screenshot_hint(lang))
             return
-
-    is_supp = role_cache.is_support(user.id)
-    if conversation_tracker.is_tracking(chat_id):
-        conversation_tracker.add(chat_id, _tracked_msg(user, text, is_support=is_supp))
-
-    # ── 1. Global support cache ───────────────────────────────────────────────
-    if is_supp:
-        cancel_pending(chat_id)
-        role_cache.try_activate(chat_id, f"known support user present (user={user.id})")
-        logger.info(f"[support] user={user.id} chat={chat_id} — jim turadi")
-        return
 
     mode = role_cache.get_mode(chat_id)
 
+    # ── Learning rejimi — barcha xabarlarni yig'adi, hech narsa demaydi ───────
+    if mode == "learning":
+        await _handle_learning(message, chat_id, user, text)
+        return
+
+    is_supp = role_cache.is_support(chat_id, user.id)
+    if conversation_tracker.is_tracking(chat_id):
+        conversation_tracker.add(chat_id, _tracked_msg(user, text, is_support=is_supp))
+
+    # ── 1. Support xodimi — faqat kuzatamiz ──────────────────────────────────
+    if is_supp:
+        cancel_pending(chat_id)
+        logger.info(f"[support] user={user.id} chat={chat_id} — jim turadi")
+        return
+
     # ── 2. AI classify ─────────────────────────────────────────────────────────
     if not settings.llm_enabled:
-        if mode == "observing":
+        if mode == "learning":
             return
-        # active + LLM yo'q → keyword
         cancel_pending(chat_id)
         matched_kw = await _keyword_match(text)
         if matched_kw:
             lang = await _get_user_lang(user.id) or _detect_lang_simple(text)
             asyncio.create_task(_increment_hit(matched_kw))
+            delay = 0 if mode == "express" else 30
             task = asyncio.create_task(
-                _delayed_reply(message, bot, lang, None, text, state_manager, "keyword")
+                _delayed_reply(message, bot, lang, None, text, state_manager, "keyword", delay=delay)
             )
             _pending[(chat_id, user.id)] = task
         return
@@ -500,7 +603,6 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
     # ── 2a. Muammo hal bo'ldi yoki rahmat ────────────────────────────────────
     if result.message_type in ("resolved", "greeting") and result.confidence >= 0.6:
         if was_recently_solved(chat_id, user.id):
-            # Bot yechgan edi → rahmat/ishladi javobiga munosabat bildirish
             await message.reply(random.choice(_GRATITUDE_REPLIES.get(lang, _GRATITUDE_REPLIES["uz"])))
             cancel_followup(chat_id, user.id)
             _solved_at.pop((chat_id, user.id), None)
@@ -516,30 +618,36 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
         await _log(user=user, chat_id=chat_id, text=text, result=result, action="resolved_trigger")
         return
 
-    # ── 2b. Support xodimi aniqlandi ──────────────────────────────────────────
+    # ── 2b. Rol aniqlash ──────────────────────────────────────────────────────
+    full_name = " ".join(filter(None, [user.first_name, user.last_name])) or None
+
     if result.is_support_message or result.message_type == "solution":
-        full_name = " ".join(filter(None, [user.first_name, user.last_name])) or str(user.id)
-        role_cache.mark_support(user.id, username=user.username, full_name=full_name)
-        role_cache.try_activate(
-            chat_id,
-            f"support detected via AI (user={user.id}, type={result.message_type})"
+        changed = role_cache.set_user_role(
+            chat_id, user.id, "plugin_staff",
+            username=user.username, full_name=full_name,
         )
+        if changed:
+            asyncio.create_task(_save_role(
+                group_id=chat_id, user=user, role="plugin_staff",
+                confidence=result.confidence,
+            ))
         cancel_pending(chat_id)
         await _log(user=user, chat_id=chat_id, text=text,
                    result=result, action="support_observed")
         return
 
-    # ── 2b. Observing rejimi ──────────────────────────────────────────────────
-    if mode == "observing":
-        logger.info(
-            f"[observing] chat={chat_id} user={user.id} "
-            f"type={result.message_type} — hali kuzatmoqdamiz"
+    if result.is_help_request and result.confidence >= CONFIDENCE_THRESHOLD:
+        changed = role_cache.set_user_role(
+            chat_id, user.id, "customer",
+            username=user.username, full_name=full_name,
         )
-        await _log(user=user, chat_id=chat_id, text=text,
-                   result=result, action="observing")
-        return
+        if changed:
+            asyncio.create_task(_save_role(
+                group_id=chat_id, user=user, role="customer",
+                confidence=result.confidence,
+            ))
 
-    # ── Active rejim ──────────────────────────────────────────────────────────
+    # ── Knowledge / Express rejimi ────────────────────────────────────────────
     cancel_pending(chat_id)
 
     # Salom/tabrik
@@ -549,26 +657,49 @@ async def handle_group_text(message: Message, bot: Bot, state_manager: StateMana
                    result=result, action="greeting_reply")
         return
 
-    # Ma'lumot/boshqa → jim
+    # Ma'lumot/boshqa → AI bir marta sinaydi, bilmasa jim; ko'paysa support
     if result.message_type in ("informational", "other"):
-        await _log(user=user, chat_id=chat_id, text=text,
-                   result=result, action="silent")
+        if settings.llm_enabled:
+            async with get_session() as session:
+                errors = list(await ErrorRepository(session).list_all())
+            ai_ans = await ai_answer_service.generate(text, errors, lang)
+            key = (chat_id, user.id)
+            if ai_ans and ai_ans.used_context:
+                await message.reply(ai_ans.text)
+                _no_answer_count.pop(key, None)
+                await _log(user=user, chat_id=chat_id, text=text, result=result, action="ai_info_reply")
+            else:
+                count = _no_answer_count.get(key, 0) + 1
+                _no_answer_count[key] = count
+                if count >= NO_ANSWER_LIMIT:
+                    _no_answer_count.pop(key, None)
+                    await _call_support(message, lang, text)
+                    await _log(user=user, chat_id=chat_id, text=text, result=result, action="no_answer_support")
+                else:
+                    await _log(user=user, chat_id=chat_id, text=text, result=result, action="silent")
+        else:
+            await _log(user=user, chat_id=chat_id, text=text, result=result, action="silent")
         return
 
     # Ishonch past → jim
     if not result.is_help_request or result.confidence < CONFIDENCE_THRESHOLD:
-        await _log(user=user, chat_id=chat_id, text=text,
-                   result=result, action="silent")
+        await _log(user=user, chat_id=chat_id, text=text, result=result, action="silent")
         return
 
-    # Yordam so'rovi → keyword save + 30s timer
+    # Yordam so'rovi — batafsil ma'lumot yo'q bo'lsa screenshot so'rash
+    if not result.has_enough_detail:
+        await message.answer(_random_screenshot_hint(lang))
+        await _log(user=user, chat_id=chat_id, text=text, result=result, action="screenshot_requested")
+        return
+
     await _save_keyword(text)
+    delay = 0 if mode == "express" else 30
     task = asyncio.create_task(
-        _delayed_reply(message, bot, lang, result, text, state_manager, "ai")
+        _delayed_reply(message, bot, lang, result, text, state_manager, "ai", delay=delay)
     )
     _pending[(chat_id, user.id)] = task
     logger.info(
-        f"30s timer boshlandi (AI) — chat={chat_id} "
+        f"{'Darhol' if mode == 'express' else '30s timer'} boshlandi ({mode}) — chat={chat_id} "
         f"conf={result.confidence:.2f} detail={result.has_enough_detail}"
     )
 
@@ -624,6 +755,49 @@ async def _update_user_lang(user_id: int, username: str | None, lang: str) -> No
                 user.updated_at = datetime.now(tz=timezone.utc)
     except Exception as exc:
         logger.warning(f"User lang yangilanmadi: {exc}")
+
+
+async def _ocr_replied_photo(replied_msg: Message, bot: Bot) -> str | None:
+    """Reply dagi rasmni yuklab OCR qiladi."""
+    try:
+        from bot.services.ocr_service import claude_ocr, easyocr_only
+        from bot.utils.storage import build_image_path
+        photo = replied_msg.photo[-1]
+        image_path = build_image_path(chat_id=replied_msg.chat.id, user_id=replied_msg.from_user.id if replied_msg.from_user else 0)
+        await bot.download(photo, destination=image_path)
+        ocr_text, ocr_conf = await easyocr_only(image_path)
+        if not ocr_text or (ocr_conf is not None and ocr_conf < settings.OCR_MIN_CONFIDENCE):
+            if settings.vision_enabled:
+                ocr_text = await claude_ocr(image_path)
+        return ocr_text or None
+    except Exception as exc:
+        logger.warning(f"[mention] reply-photo OCR xatolik: {exc}")
+        return None
+
+
+async def _save_role(
+    *,
+    group_id: int,
+    user: object,
+    role: str,
+    confidence: float = 0.9,
+) -> None:
+    try:
+        full_name = " ".join(filter(None, [
+            getattr(user, "first_name", None),
+            getattr(user, "last_name", None),
+        ])) or None
+        async with get_session() as session:
+            await GroupUserRoleRepository(session).upsert(
+                group_id=group_id,
+                telegram_user_id=user.id,
+                username=getattr(user, "username", None),
+                full_name=full_name,
+                role=role,
+                confidence_score=confidence,
+            )
+    except Exception as exc:
+        logger.warning(f"GroupUserRole saqlanmadi: {exc}")
 
 
 async def _log(

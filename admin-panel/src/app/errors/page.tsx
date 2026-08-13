@@ -204,6 +204,7 @@ export default function ErrorsPage() {
     setLoading(true);
     getErrors(page, PAGE_SIZE, search)
       .then((r) => { setItems(r.data.items); setTotal(r.data.total); })
+      .catch(() => { setItems([]); setTotal(0); })
       .finally(() => setLoading(false));
   }, [page, search]);
 

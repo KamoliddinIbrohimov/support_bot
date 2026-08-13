@@ -20,6 +20,8 @@ router = Router(name="chat_member")
 _GROUP_TYPES = {"group", "supergroup"}
 
 
+
+
 def _approval_keyboard(chat_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

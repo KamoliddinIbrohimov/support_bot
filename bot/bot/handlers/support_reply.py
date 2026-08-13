@@ -19,19 +19,21 @@ router = Router(name="support_reply")
 _GROUP_TYPES = {"group", "supergroup"}
 
 
+def _is_reply_to_bot(message: Message) -> bool:
+    rt = message.reply_to_message
+    return bool(rt and rt.from_user and rt.from_user.id == bot_context.bot_id)
+
+
 @router.message(
     F.chat.type.in_(_GROUP_TYPES),
-    F.reply_to_message.as_("replied_to"),
+    _is_reply_to_bot,
 )
 async def handle_support_reply(
     message: Message,
-    replied_to: Message,
     state_manager: StateManager,
 ) -> None:
     """Capture support staff's reply to bot's 'not found' response."""
-    # Only interested in replies to bot's own messages
-    if not replied_to.from_user or replied_to.from_user.id != bot_context.bot_id:
-        return
+    replied_to = message.reply_to_message
 
     # Only text replies are useful for learning
     if not message.text or len(message.text.strip()) < 5:

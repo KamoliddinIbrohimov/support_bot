@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import (
     ARRAY,
     BigInteger,
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -106,6 +107,9 @@ class ApprovedGroup(Base):
     added_by_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
     # 'pending' | 'approved' | 'rejected'
     status: Mapped[str] = mapped_column(String(10), nullable=False, server_default="pending")
+    # 'learning' | 'knowledge' | 'express'
+    bot_mode: Mapped[str] = mapped_column(String(10), nullable=False, server_default="knowledge")
+    poster_auto_answer: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
     approved_by: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -200,3 +204,45 @@ class OCRLog(Base):
 
     def __repr__(self) -> str:
         return f"<OCRLog id={self.id} user={self.telegram_user} via={self.matched_via}>"
+
+
+class GroupUserRole(Base):
+    """Guruh ishtirokchilarining rollari — AI yoki qo'lda belgilangan."""
+    __tablename__ = "group_user_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    telegram_user_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # 'poster_staff' | 'plugin_staff' | 'communicator' | 'customer'
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    confidence_score: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.8")
+    is_manual_override: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<GroupUserRole group={self.group_id} user={self.telegram_user_id} role={self.role}>"
+
+
+class LearningFeedEntry(Base):
+    """O'qish rejimida bot tomonidan qayd etilgan savol-javob juftliklari."""
+    __tablename__ = "learning_feed"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    group_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    question_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    question_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    answer_user_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    question_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    answer_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_confirmed: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="false")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<LearningFeedEntry id={self.id} group={self.group_id} confirmed={self.is_confirmed}>"

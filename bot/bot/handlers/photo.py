@@ -49,12 +49,25 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
     if user is None:
         return
 
-    # Guruh bo'lsa — tasdiqlangan va active rejimda ekanini tekshir
+    logger.info(
+        f"[photo] keldi: chat={message.chat.id} user={getattr(user, 'id', '?')} "
+        f"caption={message.caption!r} entities={message.caption_entities}"
+    )
+
+    # Guruh bo'lsa — tasdiqlangan ekanini tekshir
     if message.chat.type in ("group", "supergroup"):
         if not group_cache.is_approved(message.chat.id):
             return
-        if role_cache.get_mode(message.chat.id) == "observing":
-            return
+        if role_cache.get_mode(message.chat.id) == "learning":
+            # @mention bo'lsa — to'liq javob beradi, bo'lmasa faqat kuzatadi
+            has_mention = _has_bot_mention(message)
+            logger.info(
+                f"[photo] learning mode: caption={message.caption!r} "
+                f"entities={message.caption_entities} mention={has_mention}"
+            )
+            if not has_mention:
+                await _handle_photo_learning(message, bot, photo, user)
+                return
 
     image_path = build_image_path(chat_id=message.chat.id, user_id=user.id)
     cancel_pending(message.chat.id)
@@ -68,6 +81,111 @@ async def handle_photo(message: Message, bot: Bot, state_manager: StateManager) 
     finally:
         _stop_typing.set()
         _typing_task.cancel()
+
+
+@router.message(F.video)
+async def handle_video(message: Message) -> None:
+    """Learning modeda support videosini tracker ga qo'shadi."""
+    user = message.from_user
+    if user is None:
+        return
+    if message.chat.type not in ("group", "supergroup"):
+        return
+    if not group_cache.is_approved(message.chat.id):
+        return
+    if role_cache.get_mode(message.chat.id) != "learning":
+        return
+    if not role_cache.is_support(message.chat.id, user.id):
+        return
+
+    full_name = " ".join(filter(None, [
+        getattr(user, "first_name", None),
+        getattr(user, "last_name", None),
+    ])) or str(user.id)
+
+    caption = message.caption or ""
+    tracked = TrackedMsg(
+        user_id=user.id,
+        username=getattr(user, "username", None),
+        display_name=full_name,
+        is_support=True,
+        text=f"[Support videosi]{': ' + caption if caption else ''}",
+        video_file_id=message.video.file_id,
+    )
+    if conversation_tracker.is_tracking(message.chat.id):
+        conversation_tracker.add(message.chat.id, tracked)
+    else:
+        conversation_tracker.start(message.chat.id, tracked)
+    logger.info(f"[learning] Support video tracker ga qo'shildi chat={message.chat.id}")
+
+
+def _has_bot_mention(message: Message) -> bool:
+    """Rasm caption da bot @mention bormi tekshiradi."""
+    from bot import bot_context
+    bot_username = bot_context.bot_username
+    if not bot_username:
+        return False
+    entities = message.caption_entities or []
+    caption = message.caption or ""
+    mention_tag = f"@{bot_username}".lower()
+    for ent in entities:
+        if ent.type == "mention":
+            chunk = caption[ent.offset: ent.offset + ent.length].lower()
+            if chunk == mention_tag:
+                return True
+    return False
+
+
+async def _handle_photo_learning(message: Message, bot: Bot, photo: PhotoSize, user) -> None:
+    """Learning modeda: rasm OCR qilinadi, matn tracker ga yoziladi. Javob berilmaydi."""
+    image_path = build_image_path(chat_id=message.chat.id, user_id=user.id)
+    try:
+        await bot.download(photo, destination=image_path)
+    except Exception as exc:
+        logger.warning(f"[learning] Rasm yuklanmadi: {exc}")
+        return
+
+    ocr_text, ocr_conf = await easyocr_only(image_path)
+
+    low_quality = not ocr_text or (ocr_conf is not None and ocr_conf < settings.OCR_MIN_CONFIDENCE)
+    if low_quality and settings.vision_enabled:
+        logger.info(f"[learning] EasyOCR sifati past (conf={ocr_conf}), AI OCR ishlatilmoqda")
+        ai_text = await claude_ocr(image_path)
+        if ai_text:
+            ocr_text = ai_text
+            ocr_conf = None
+
+    if not ocr_text:
+        logger.info(f"[learning] Screenshot OCR matn topilmadi chat={message.chat.id}")
+        return
+
+    logger.info(
+        f"[learning] Screenshot OCR: {len(ocr_text)} belgi "
+        f"chat={message.chat.id} user={user.id}"
+    )
+
+    is_supp = role_cache.is_support(message.chat.id, user.id)
+    full_name = " ".join(filter(None, [
+        getattr(user, "first_name", None),
+        getattr(user, "last_name", None),
+    ])) or str(user.id)
+
+    photo_file_id = photo.file_id if is_supp else None
+    tracked = TrackedMsg(
+        user_id=user.id,
+        username=getattr(user, "username", None),
+        display_name=full_name,
+        is_support=is_supp,
+        text=f"[{'Support rasmi' if is_supp else 'Screenshot xatolik matni'}]: {ocr_text[:500]}",
+        photo_file_id=photo_file_id,
+    )
+
+    if conversation_tracker.is_tracking(message.chat.id):
+        conversation_tracker.add(message.chat.id, tracked)
+    else:
+        conversation_tracker.start(message.chat.id, tracked)
+
+    await _log(message, str(image_path), ocr_text, ocr_conf, None, None, "learning_ocr")
 
 
 async def _handle_photo_inner(message, bot, state_manager, photo, user, image_path) -> None:
@@ -96,6 +214,12 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
     # ── Step 1: EasyOCR (lokal, bepul) ───────────────────────────────────────
     ocr_text, ocr_conf = await easyocr_only(image_path)
     ocr_source = "easyocr"
+
+    # Caption matni ham qo'shamiz (foydalanuvchi rasm bilan matn ham yozgan bo'lsa)
+    caption = (message.caption or "").strip()
+    if caption:
+        ocr_text = f"{ocr_text} {caption}".strip() if ocr_text else caption
+        logger.info(f"Caption qo'shildi: {len(caption)} belgi")
 
     # ── Step 2: Relevance check (text mavjud bo'lsa) ──────────────────────────
     if ocr_text:
@@ -247,7 +371,7 @@ async def _handle_photo_inner(message, bot, state_manager, photo, user, image_pa
 
     if is_group:
         # AI ham javob bera olmadi → support chaqir
-        mentions = role_cache.get_support_mentions()
+        mentions = role_cache.get_support_mentions(message.chat.id)
         mention_str = " ".join(mentions) if mentions else ""
         if lang == "ru":
             call_text = (

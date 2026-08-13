@@ -35,13 +35,13 @@ def decode_token(token: str) -> str:
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[_ALGORITHM])
         return payload["sub"]
     except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token muddati tugagan")
+        raise HTTPException(status_code=401, detail="Срок действия токена истёк")
     except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Token noto'g'ri")
+        raise HTTPException(status_code=401, detail="Неверный токен")
 
 
 @router.post("/login", response_model=TokenResponse)
 async def login(data: LoginRequest):
     if data.username != settings.ADMIN_USERNAME or data.password != settings.ADMIN_PASSWORD:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Login yoki parol noto'g'ri")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный логин или пароль")
     return TokenResponse(access_token=create_access_token())

@@ -1,7 +1,6 @@
-"""In-memory cache of approved group IDs.
+"""In-memory cache of approved group IDs, modes and user roles.
 
-Loaded from DB at startup; updated instantly on approve/reject.
-Avoids a DB query on every group message.
+Loaded from DB at startup; updated instantly on approve/reject/mode-change.
 """
 from __future__ import annotations
 
@@ -11,14 +10,15 @@ _approved: set[int] = set()
 async def load() -> None:
     from bot import role_cache
     from database.connection import get_session
-    from database.repositories import GroupRepository
+    from database.repositories import GroupRepository, GroupUserRoleRepository
     async with get_session() as session:
         groups = await GroupRepository(session).list_approved()
         _approved.clear()
         _approved.update(g.chat_id for g in groups)
-        # Tasdiqlangan guruhlar darhol active rejimda bo'lsin
         for g in groups:
-            role_cache.set_active(g.chat_id)
+            role_cache.set_mode(g.chat_id, g.bot_mode)
+            roles = await GroupUserRoleRepository(session).list_by_group(g.chat_id)
+            role_cache.load_roles(g.chat_id, roles)
 
 
 def is_approved(chat_id: int) -> bool:

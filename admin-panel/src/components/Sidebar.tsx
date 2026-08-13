@@ -1,12 +1,13 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { LayoutDashboard, Database, Users } from "lucide-react";
+import { LayoutDashboard, Database, Users, BarChart2 } from "lucide-react";
 
 const links = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/errors",    label: "Xatolar",   icon: Database },
-  { href: "/groups",    label: "Guruhlar",  icon: Users },
+  { href: "/dashboard",  label: "Dashboard",   icon: LayoutDashboard },
+  { href: "/errors",     label: "Xatolar",     icon: Database },
+  { href: "/groups",     label: "Guruhlar",    icon: Users },
+  { href: "/stats",      label: "Statistika",  icon: BarChart2 },
 ];
 
 export function Sidebar() {
@@ -38,7 +39,6 @@ export function Sidebar() {
           );
         })}
       </nav>
-
     </aside>
   );
 }

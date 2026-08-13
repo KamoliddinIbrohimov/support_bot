@@ -6,7 +6,7 @@ from typing import Sequence
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.models import ApprovedGroup, ErrorEntry, HelpKeyword, MessageClassification, OCRLog, User
+from database.models import ApprovedGroup, ErrorEntry, GroupUserRole, HelpKeyword, MessageClassification, OCRLog, User
 
 
 class UserRepository:
@@ -102,6 +102,33 @@ class ErrorRepository:
 
     async def get_by_id(self, error_id: int) -> ErrorEntry | None:
         return await self._session.get(ErrorEntry, error_id)
+
+    async def update_solution(
+        self,
+        error_id: int,
+        *,
+        solution_ru: str,
+        solution_uz: str,
+        keywords_ru: list[str] | None = None,
+        keywords_uz: list[str] | None = None,
+        solution_video_file_id: str | None = None,
+        solution_image_file_id: str | None = None,
+    ) -> ErrorEntry | None:
+        entry = await self.get_by_id(error_id)
+        if entry is None:
+            return None
+        entry.solution_ru = solution_ru
+        entry.solution_uz = solution_uz
+        if keywords_ru:
+            entry.keywords_ru = keywords_ru
+        if keywords_uz:
+            entry.keywords_uz = keywords_uz
+        if solution_video_file_id:
+            entry.solution_video_file_id = solution_video_file_id
+        if solution_image_file_id:
+            entry.solution_image_file_id = solution_image_file_id
+        await self._session.flush()
+        return entry
 
     async def update_video(self, error_id: int, file_id: str) -> ErrorEntry | None:
         entry = await self.get_by_id(error_id)
@@ -214,6 +241,52 @@ class OCRLogRepository:
             select(OCRLog).order_by(OCRLog.created_at.desc()).limit(limit)
         )
         return result.scalars().all()
+
+
+class GroupUserRoleRepository:
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def list_by_group(self, group_id: int) -> list[GroupUserRole]:
+        result = await self._session.execute(
+            select(GroupUserRole).where(GroupUserRole.group_id == group_id)
+        )
+        return list(result.scalars().all())
+
+    async def upsert(
+        self,
+        *,
+        group_id: int,
+        telegram_user_id: int,
+        username: str | None,
+        full_name: str | None,
+        role: str,
+        confidence_score: float = 0.9,
+        is_manual_override: bool = False,
+    ) -> None:
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        stmt = pg_insert(GroupUserRole).values(
+            group_id=group_id,
+            telegram_user_id=telegram_user_id,
+            username=username,
+            full_name=full_name,
+            role=role,
+            confidence_score=confidence_score,
+            is_manual_override=is_manual_override,
+            updated_at=datetime.now(tz=timezone.utc),
+        )
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["group_id", "telegram_user_id"],
+            set_={
+                "username": stmt.excluded.username,
+                "full_name": stmt.excluded.full_name,
+                "role": stmt.excluded.role,
+                "confidence_score": stmt.excluded.confidence_score,
+                "updated_at": stmt.excluded.updated_at,
+            },
+            where=(GroupUserRole.is_manual_override == False),
+        )
+        await self._session.execute(stmt)
 
 
 class GroupRepository:
