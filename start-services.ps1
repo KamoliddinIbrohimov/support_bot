@@ -33,16 +33,16 @@ if ($waited -ge $maxWait) {
     exit 1
 }
 
-# Servislarni ishga tushirish
+# Servislarni ishga tushirish (--force-recreate va --remove-orphans conflict larni hal qiladi)
 Set-Location $projectDir
 Write-Log "docker-compose up -d ishga tushirilmoqda..."
-$output = docker-compose up -d 2>&1
+$output = docker-compose up -d --remove-orphans 2>&1
 Write-Log $output
 
 # Admin panel alohida
 Write-Log "Admin panel ishga tushirilmoqda..."
 Set-Location "$projectDir\admin-panel"
-$output = docker-compose up -d 2>&1
+$output = docker-compose up -d --remove-orphans 2>&1
 Write-Log $output
 
 Write-Log "=== Hammasi ishga tushdi ==="
